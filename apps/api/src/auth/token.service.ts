@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common'
 import { JwtService } from '@nestjs/jwt'
-import { type PublicUser, toPublicUser } from '../users/users.service.js'
+import { type PublicUser, toPublicUser } from '../users/user.js'
 
 export interface AuthResult {
   accessToken: string

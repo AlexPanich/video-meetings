@@ -1,5 +1,5 @@
 import { Query } from '@nestjs/cqrs'
-import type { PublicUser } from '../../users/users.service.js'
+import type { PublicUser } from '../../users/user.js'
 
 export class GetCurrentUserQuery extends Query<PublicUser> {
   constructor(public readonly userId: string) {
