@@ -13,6 +13,10 @@
 
 Один тест: `pnpm --filter web test src/app/page.test.tsx -t "renders main heading"`.
 
+## Next.js 16
+
+Версия с breaking changes: API, конвенции и структура файлов могут отличаться от привычных. Перед написанием кода читайте нужный гайд в `apps/web/node_modules/next/dist/docs/` и учитывайте deprecation-предупреждения. `next dev` сам создаёт `AGENTS.md` с этим правилом — это отключено через `agentRules: false` в `next.config.ts`.
+
 ## Структура
 
 - `src/app` — маршруты App Router (`layout.tsx`, `page.tsx`, стили `*.module.css`, `globals.css`).
@@ -31,7 +35,7 @@
 
 ## Особенности
 
-- По умолчанию dev-сервер на порту 3000, как и API — при одновременном запуске задавайте `PORT` для API.
+- Dev-сервер на порту 3000; API слушает 3001, конфликта нет.
 - `.next`, `next-env.d.ts` и `tsconfig.tsbuildinfo` — генерируемые файлы, не править вручную.
 
 ## Документация
