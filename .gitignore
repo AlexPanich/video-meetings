@@ -31,3 +31,6 @@ pnpm-debug.log*
 
 # prisma
 apps/api/src/generated
+
+# playwright mcp
+.playwright-mcp
