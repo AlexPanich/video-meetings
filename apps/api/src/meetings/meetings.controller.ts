@@ -15,7 +15,10 @@ export class MeetingsController {
   ) {}
 
   @Post()
-  create(@Req() req: AuthenticatedRequest, @Body() { title, date, participants }: CreateMeetingDto) {
+  create(
+    @Req() req: AuthenticatedRequest,
+    @Body() { title, date, participants }: CreateMeetingDto,
+  ) {
     return this.commandBus.execute(
       new CreateMeetingCommand(req.userId, title, new Date(date), participants),
     )
