@@ -19,7 +19,9 @@
 
 ## Структура
 
-- `src/app` — маршруты App Router (`layout.tsx`, `page.tsx`, стили `*.module.css`, `globals.css`).
+- `src/app/page.tsx` — главная; `src/app/(auth)/login`, `register` — страницы входа и регистрации (`AuthShell` + `LoginForm`/`RegisterForm` из `src/components`).
+- `src/lib/api.ts` — клиент API (`login`, `register`, `getMe`, `ApiError`); `src/lib/session.ts` — JWT в `localStorage`. Запросы идут на `/api/*`, а `next.config.ts` (`rewrites`) проксирует их на бэкенд (`API_URL`, по умолчанию `http://localhost:3001`), поэтому CORS не нужен.
+- `src/app` — маршруты App Router (`layout.tsx`, `page.tsx`, `globals.css` с Tailwind и HeroUI).
 - Алиас путей `@/*` → `src/*`.
 - `next.config.ts` включает `cacheComponents` и `partialPrefetching` — учитывать при работе с кэшированием и динамическими данными в Server Components.
 
@@ -31,7 +33,7 @@
 
 ## UI
 
-Планируется HeroUI (скилл `heroui-react`), пока не установлен как зависимость. Перед добавлением компонентов — установить `@heroui/react` и свериться со скиллом.
+HeroUI v3 (`@heroui/react`, `@heroui/styles`) на Tailwind CSS v4. Провайдер не нужен; стили подключены в `src/app/globals.css` (`@import 'tailwindcss'` → `@import '@heroui/styles'`, порядок важен), PostCSS — `postcss.config.mjs`. Компоненты составные (`Card.Header`), обработчики — `onPress`, не `onClick`. Перед добавлением компонентов сверяйтесь со скиллом `heroui-react` и документацией (`https://heroui.com/docs/react/components/<name>.mdx`).
 
 ## Особенности
 
@@ -40,4 +42,4 @@
 
 ## Документация
 
-При изменении архитектуры `apps/web` (структура `src`, маршруты, стек, зависимости, команды, конфиги) обновляйте этот файл и корневой `CLAUDE.md` в том же изменении; убирайте устаревшие утверждения (например, про HeroUI, когда он будет установлен).
+При изменении архитектуры `apps/web` (структура `src`, маршруты, стек, зависимости, команды, конфиги) обновляйте этот файл и корневой `CLAUDE.md` в том же изменении; убирайте устаревшие утверждения.

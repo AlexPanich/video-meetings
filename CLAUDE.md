@@ -60,7 +60,7 @@ docker compose down           # остановить (-v — удалить да
 
 ## Gotchas
 
-- Web слушает порт 3000, API — 3001 (`process.env.PORT ?? 3001` в `apps/api/src/main.ts`). `pnpm dev` запускает оба; API читает корневой `.env` (`cp .env.example .env`), `JWT_SECRET` обязателен.
+- Web слушает порт 3000, API — 3001 (`process.env.PORT ?? 3001` в `apps/api/src/main.ts`). `pnpm dev` запускает оба; web проксирует `/api/*` на API (`API_URL`); API читает корневой `.env` (`cp .env.example .env`), `JWT_SECRET` обязателен.
 - `pnpm-workspace.yaml` whitelists dependency build scripts (`onlyBuiltDependencies`); new packages that need postinstall scripts must be added there.
 
 ## Code style
@@ -69,11 +69,11 @@ Prettier (root `.prettierrc`): single quotes, trailing commas, no semicolons, `p
 
 ## UI library
 
-`skills-lock.json` pins the `heroui-react` skill (HeroUI), indicating HeroUI is the intended component library for `apps/web`, though it is not yet installed as a dependency.
+`apps/web` uses **HeroUI v3** (`@heroui/react`, `@heroui/styles`) on Tailwind CSS v4 (PostCSS via `@tailwindcss/postcss`). Styles are wired in `apps/web/src/app/globals.css`; no provider is needed. Use the `heroui-react` skill (pinned in `skills-lock.json`) and fetch component docs before building UI.
 
 ## Keeping docs up to date
 
-When a change alters the architecture — new/removed apps or shared packages, module or directory structure, tech stack or major dependencies, build/test/dev commands, ports, env vars, or conventions — update the affected documentation **in the same change**: this root `CLAUDE.md`, the `CLAUDE.md` of each touched app (`apps/*/CLAUDE.md`), and any README. Remove statements that are no longer true (e.g. "no shared package yet", "HeroUI is not installed").
+When a change alters the architecture — new/removed apps or shared packages, module or directory structure, tech stack or major dependencies, build/test/dev commands, ports, env vars, or conventions — update the affected documentation **in the same change**: this root `CLAUDE.md`, the `CLAUDE.md` of each touched app (`apps/*/CLAUDE.md`), and any README. Remove statements that are no longer true (e.g. "no shared package yet").
 
 ## Hooks
 
