@@ -7,7 +7,7 @@
 Запускать из корня через `pnpm --filter api <script>` или из этой папки через `pnpm <script>`:
 
 - `build` — `nest build` (результат в `dist/`); `start:prod` — `node dist/main`
-- `start:dev` — watch-режим; `start:debug` — watch + inspector
+- `dev` — watch-режим с загрузкой корневого `.env` (его же запускает `pnpm dev` из корня); `start:dev` — алиас на `dev`; `start:debug` — watch + inspector
 - `lint` — ESLint по `src` и `test`
 - `test` — `vitest run` (unit); `test:watch`; `test:cov`; `test:debug`
 - `test:e2e` — `vitest run --config ./vitest.config.e2e.ts`
@@ -22,7 +22,7 @@
 
 ## Структура
 
-- `src/main.ts` — bootstrap, порт `process.env.PORT ?? 3000` (конфликтует с web — задавайте `PORT`).
+- `src/main.ts` — bootstrap, порт `process.env.PORT ?? 3001` (web занимает 3000).
 - `src/app.module.ts`, `app.controller.ts`, `app.service.ts` — корневой модуль; новые фичи оформлять отдельными Nest-модулями (`nest g module|controller|service`).
 - `src/auth` — регистрация/логин/JWT на **CQRS** (`@nestjs/cqrs`): `commands/` (`RegisterUserCommand`, `LoginUserCommand` + handlers), `queries/` (`GetCurrentUserQuery` + handler), `TokenService` (выпуск JWT), `AuthController` (только `CommandBus`/`QueryBus`), `JwtAuthGuard`, DTO, `password.ts` на scrypt. Новая операция = класс команды/запроса + handler, зарегистрированный в `providers` модуля; `src/meetings` — встречи (CQRS): `POST /meetings`, `GET /meetings`, `GET /meetings/:id` (всё под `JwtAuthGuard`, встречи видны только владельцу, чужая/несуществующая = 404), `commands/CreateMeeting*`, `queries/ListMeetings*`, `GetMeeting*`, модель Prisma `Meeting` (`participants` — `String[]`); `AuthModule` экспортирует `JwtModule` и `JwtAuthGuard` для других модулей; `src/users` — `UsersService`; `src/prisma` — глобальный `PrismaService`.
 - `prisma/schema.prisma`, `prisma/migrations`, `prisma.config.ts` — Prisma 7. Клиент генерируется в `src/generated/prisma` (не править, в git не входит); `prisma:generate`, `prisma:migrate`, `prisma:deploy`.

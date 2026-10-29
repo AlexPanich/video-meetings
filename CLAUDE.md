@@ -60,7 +60,7 @@ docker compose down           # остановить (-v — удалить да
 
 ## Gotchas
 
-- Both apps default to port 3000 (Next dev and `process.env.PORT ?? 3000` in `apps/api/src/main.ts`). Set `PORT` for the API when running `pnpm dev`.
+- Web слушает порт 3000, API — 3001 (`process.env.PORT ?? 3001` в `apps/api/src/main.ts`). `pnpm dev` запускает оба; API читает корневой `.env` (`cp .env.example .env`), `JWT_SECRET` обязателен.
 - `pnpm-workspace.yaml` whitelists dependency build scripts (`onlyBuiltDependencies`); new packages that need postinstall scripts must be added there.
 
 ## Code style
