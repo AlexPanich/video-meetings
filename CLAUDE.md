@@ -80,6 +80,12 @@ When a change alters the architecture — new/removed apps or shared packages, m
 
 `.husky/pre-commit` запускает `pnpm lint` и `pnpm test` (unit, без БД) перед каждым коммитом; при ошибке коммит блокируется. Хуки ставятся автоматически при `pnpm install` (скрипт `prepare`: `husky`, он же выставляет `core.hooksPath`). e2e в хук не входят — они требуют Postgres, запускайте `pnpm test:e2e` вручную. Обход в крайнем случае — `git commit --no-verify`.
 
+## Правила работы Claude
+
+- **Коммиты на русском:** summary и body сообщений коммитов пишутся по-русски; префикс Conventional Commits (`feat`, `fix`, `chore`…) и trailer `Co-Authored-By` остаются как есть.
+- **Dev-серверы не запускать:** разработчик держит `pnpm dev` у себя. Запуск вторым экземпляром конфликтует по портам 3000/3001, а `pkill` по `next`/`nest`/`pnpm` убивает его серверы. Для проверки в браузере сначала посмотреть, что слушает порт (`lsof -iTCP:3000 -sTCP:LISTEN`); если сервера нет — попросить запустить.
+- **Артефакты Playwright чистить:** после работы с Playwright MCP удалять из `.playwright-mcp/` скриншоты (`*.png`), логи консоли (`console-*.log`) и снимки страниц (`page-*.yml`). Папка в `.gitignore`, коммитить её не нужно.
+
 ## Hooks
 
 `.claude/settings.json` defines a `PostToolUse` hook (`Write|Edit`) that runs `prettier --write` on every file Claude changes; files matched by `.prettierignore` or unsupported by Prettier are skipped. No manual formatting is needed after edits.
