@@ -1,9 +1,12 @@
+import { Skeleton } from '@heroui/react'
 import { Video } from '@gravity-ui/icons'
-import { HomeActions } from '@/components/home-actions'
+import { Suspense } from 'react'
+import { MeetingsOverview } from '@/components/meetings-overview'
+import { UserGreeting } from '@/components/user-greeting'
 
 export default function Home() {
   return (
-    <main className="relative flex min-h-screen flex-col items-center justify-center gap-6 overflow-hidden px-4 text-center">
+    <main className="relative flex min-h-screen flex-col items-center justify-center gap-6 overflow-hidden px-4 py-12 text-center">
       <div
         aria-hidden
         className="pointer-events-none absolute -top-40 left-1/2 size-[32rem] -translate-x-1/2 rounded-full bg-accent/20 blur-3xl"
@@ -16,7 +19,14 @@ export default function Home() {
         Видеовстречи для вашей команды — просто и быстро.
       </p>
       <div className="relative">
-        <HomeActions />
+        <Suspense fallback={<Skeleton className="h-10 w-48 rounded-xl" />}>
+          <UserGreeting />
+        </Suspense>
+      </div>
+      <div className="relative w-full max-w-xl">
+        <Suspense fallback={<Skeleton className="h-64 w-full rounded-2xl" />}>
+          <MeetingsOverview />
+        </Suspense>
       </div>
     </main>
   )

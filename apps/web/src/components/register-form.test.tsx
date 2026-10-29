@@ -9,7 +9,6 @@ const fetchMock = vi.fn()
 
 beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock)
-  localStorage.clear()
   push.mockClear()
   fetchMock.mockReset()
 })
@@ -33,14 +32,11 @@ describe('RegisterForm', () => {
   })
 
   it('registers and redirects when passwords match', async () => {
-    fetchMock.mockResolvedValue(
-      Response.json({ accessToken: 'jwt', user: { id: '1', email: 'a@b.co', name: 'Аня' } }),
-    )
+    fetchMock.mockResolvedValue(Response.json({ user: { id: '1', email: 'a@b.co', name: 'Аня' } }))
     render(<RegisterForm />)
     await fill('secret123')
 
     await vi.waitFor(() => expect(push).toHaveBeenCalledWith('/'))
-    expect(localStorage.getItem('access-token')).toBe('jwt')
     expect(screen.getByLabelText(/Имя/)).toHaveValue('')
     expect(screen.getByLabelText(/^Пароль/)).toHaveValue('')
     expect(screen.getByLabelText(/Подтвердите пароль/)).toHaveValue('')

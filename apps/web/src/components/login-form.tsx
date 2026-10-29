@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation'
 import { type SyntheticEvent, useState } from 'react'
 import { login } from '@/lib/api'
 import { PasswordField } from './password-field'
-import { setToken } from '@/lib/session'
 
 export function LoginForm() {
   const router = useRouter()
@@ -19,8 +18,7 @@ export function LoginForm() {
     setError(null)
     setPending(true)
     try {
-      const { accessToken } = await login(String(data.get('email')), String(data.get('password')))
-      setToken(accessToken)
+      await login(String(data.get('email')), String(data.get('password')))
       // Next сохраняет состояние ушедшей страницы — очищаем, чтобы форма не вернулась заполненной
       form.reset()
       setPending(false)

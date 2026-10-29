@@ -9,7 +9,6 @@ const fetchMock = vi.fn()
 
 beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock)
-  localStorage.clear()
   push.mockClear()
   fetchMock.mockReset()
 })
@@ -23,14 +22,11 @@ const fillAndSubmit = async () => {
 
 describe('LoginForm', () => {
   it('stores the token and redirects on success', async () => {
-    fetchMock.mockResolvedValue(
-      Response.json({ accessToken: 'jwt', user: { id: '1', email: 'a@b.co', name: 'A' } }),
-    )
+    fetchMock.mockResolvedValue(Response.json({ user: { id: '1', email: 'a@b.co', name: 'A' } }))
     render(<LoginForm />)
     await fillAndSubmit()
 
     await vi.waitFor(() => expect(push).toHaveBeenCalledWith('/'))
-    expect(localStorage.getItem('access-token')).toBe('jwt')
     expect(screen.getByLabelText('Email')).toHaveValue('')
     expect(screen.getByLabelText('Пароль')).toHaveValue('')
     expect(fetchMock).toHaveBeenCalledWith(

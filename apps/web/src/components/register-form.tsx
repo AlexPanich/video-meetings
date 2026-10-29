@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation'
 import { type SyntheticEvent, useState } from 'react'
 import { register } from '@/lib/api'
 import { PasswordField } from './password-field'
-import { setToken } from '@/lib/session'
 
 const MIN_PASSWORD_LENGTH = 8
 
@@ -22,12 +21,11 @@ export function RegisterForm() {
     setError(null)
     setPending(true)
     try {
-      const { accessToken } = await register(
+      await register(
         String(data.get('name')).trim(),
         String(data.get('email')),
         String(data.get('password')),
       )
-      setToken(accessToken)
       // Next сохраняет состояние ушедшей страницы — очищаем, чтобы форма не вернулась заполненной
       form.reset()
       setPassword('')

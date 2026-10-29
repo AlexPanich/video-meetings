@@ -19,11 +19,11 @@
 
 ## Структура
 
-- `src/app/page.tsx` — главная; `src/app/(auth)/login`, `register` — страницы входа и регистрации (`AuthShell` + `LoginForm`/`RegisterForm` из `src/components`).
-- `src/lib/api.ts` — клиент API (`login`, `register`, `getMe`, `ApiError`); `src/lib/session.ts` — JWT в `localStorage`. Запросы идут на `/api/*`, а `next.config.ts` (`rewrites`) проксирует их на бэкенд (`API_URL`, по умолчанию `http://localhost:3001`), поэтому CORS не нужен.
+- `src/app/page.tsx` — главная (только для авторизованных: гость без cookie редиректится на `/login` в `src/proxy.ts` до рендера; внутри `<Suspense>` серверный `UserGreeting` через `getCurrentUser()` (`src/lib/server/auth.ts`, cookie → `GET /auth/me`) получает пользователя и при отказе API делает `redirect('/login')`; `MeetingsOverview` (счётчик встреч, последние 3, кнопка «Создать встречу» — пока заглушка без действия; данные из `getMeetings()` в `src/lib/server/meetings.ts`); `LogoutButton` — клиентский; оболочка страницы статична, данные пользователя динамические); `src/app/(auth)/login`, `register` — страницы входа и регистрации (`AuthShell` + `LoginForm`/`RegisterForm` из `src/components`).
+- `src/lib/api.ts` — клиент API (`login`, `register`, `getMe`, `ApiError`, `logout`). Запросы идут на `/api/*` — это route handlers Next (BFF), CORS не нужен: `src/app/api/auth/{login,register,logout}` ставят/сбрасывают HttpOnly-cookie `access-token` (JWT от API в браузер не попадает, клиенту отдаётся только `user`), а `src/app/api/[...path]` проксирует остальное на бэкенд (`API_URL`, по умолчанию `http://localhost:3001`), подставляя `Authorization: Bearer` из cookie и сбрасывая cookie при 401. Серверные хелперы — `src/lib/server/auth.ts`.
 - `src/app` — маршруты App Router (`layout.tsx`, `page.tsx`, `globals.css` с Tailwind и HeroUI).
 - Алиас путей `@/*` → `src/*`.
-- `next.config.ts` включает `cacheComponents` и `partialPrefetching` — учитывать при работе с кэшированием и динамическими данными в Server Components.
+- `next.config.ts` (rewrites больше нет) включает `cacheComponents` и `partialPrefetching` — учитывать при работе с кэшированием и динамическими данными в Server Components.
 
 ## Тесты
 
