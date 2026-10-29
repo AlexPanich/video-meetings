@@ -12,7 +12,7 @@
 - `test` — `vitest run` (unit); `test:watch`; `test:cov`; `test:debug`
 - `test:e2e` — `vitest run --config ./vitest.config.e2e.ts`
 
-Один тест: `pnpm --filter api test src/app.controller.spec.ts`.
+Один тест: `pnpm --filter api test src/users/user.spec.ts`.
 
 ## ESM
 
@@ -23,15 +23,25 @@
 ## Структура
 
 - `src/main.ts` — bootstrap, порт `process.env.PORT ?? 3001` (web занимает 3000).
-- `src/app.module.ts`, `app.controller.ts`, `app.service.ts` — корневой модуль; новые фичи оформлять отдельными Nest-модулями (`nest g module|controller|service`).
-- `src/auth` — регистрация/логин/JWT на **CQRS** (`@nestjs/cqrs`): `commands/` (`RegisterUserCommand`, `LoginUserCommand` + handlers), `queries/` (`GetCurrentUserQuery` + handler), `TokenService` (выпуск JWT), `AuthController` (только `CommandBus`/`QueryBus`), `JwtAuthGuard`, DTO, `password.ts` на scrypt. Новая операция = класс команды/запроса + handler, зарегистрированный в `providers` модуля; `src/meetings` — встречи (CQRS): `POST /meetings`, `GET /meetings`, `GET /meetings/:id` (всё под `JwtAuthGuard`, встречи видны только владельцу, чужая/несуществующая = 404), `commands/CreateMeeting*`, `queries/ListMeetings*`, `GetMeeting*`, модель Prisma `Meeting` (`participants` — `String[]`); `AuthModule` экспортирует `JwtModule` и `JwtAuthGuard` для других модулей; `src/users` — `UsersService`; `src/prisma` — глобальный `PrismaService`.
+- `src/app.module.ts` — корневой модуль: подключает `PrismaModule`, `UsersModule`, `AuthModule`, `MeetingsModule` и глобальный `ValidationPipe` (`APP_PIPE`, `whitelist` + `transform`). Корневого контроллера/сервиса нет (`GET /` → 404); новые фичи оформлять отдельными Nest-модулями (`nest g module`) и подключать в `AppModule`.
+- `src/swagger.ts` — `setupSwagger(app)`: OpenAPI на `@nestjs/swagger` (UI `GET /docs`, JSON `GET /docs-json`, Bearer-авторизация). Вызывается в `main.ts`. Схемы DTO строит плагин Nest CLI из `nest-cli.json` (`esmCompatible`, файлы `dto.ts`), поэтому `@ApiProperty` в DTO не нужен; контроллеры помечать `@ApiTags(...)`, защищённые маршруты — `@ApiBearerAuth()`. Плагин работает только при `nest build`/`dev`; в vitest схемы полей DTO не генерируются.
+
+**Модули**
+
+- `src/auth` (CQRS) — `POST /auth/register`, `POST /auth/login`, `GET /auth/me`. `commands/` (`RegisterUser*`, `LoginUser*`), `queries/` (`GetCurrentUser*`), `TokenService` (выпуск JWT), `AuthController` (только `CommandBus`/`QueryBus`), `JwtAuthGuard`, `dto.ts`, `password.ts` (scrypt). Данные пользователей берёт у `users` через шины. Экспортирует `JwtModule` и `JwtAuthGuard` для других модулей.
+- `src/users` (CQRS, без контроллера, только для `auth`) — `commands/CreateUser*`, `queries/FindUserByEmail*`, `FindUserById*`. Возвращают сущность Prisma `User` с `passwordHash` — это внутренние сообщения, наружу их не отдавать. `user.ts` — `PublicUser`, `toPublicUser`.
+- `src/meetings` (CQRS) — `POST /meetings`, `GET /meetings`, `GET /meetings/:id`, всё под `JwtAuthGuard`; встречи видны только владельцу, чужая/несуществующая = 404. `commands/CreateMeeting*`, `queries/ListMeetings*`, `GetMeeting*`, модель Prisma `Meeting` (`participants` — `String[]`).
+- `src/prisma` — глобальный `PrismaModule`/`PrismaService`.
+
+Новая операция = класс команды/запроса + handler, зарегистрированный в `providers` модуля.
+
 - `prisma/schema.prisma`, `prisma/migrations`, `prisma.config.ts` — Prisma 7. Клиент генерируется в `src/generated/prisma` (не править, в git не входит); `prisma:generate`, `prisma:migrate`, `prisma:deploy`.
 - Env: `JWT_SECRET` (обязателен), `JWT_EXPIRES_IN` (`1h`), `DATABASE_URL` (по умолчанию локальный docker-compose).
 - `dist/` — артефакты сборки, не править.
 
 ## CQRS
 
-Бизнес-логика модулей `auth` и `meetings` построена на `@nestjs/cqrs`. Разделение только на уровне кода: отдельных моделей чтения/записи, событий и event bus нет.
+Бизнес-логика модулей `auth`, `users` и `meetings` построена на `@nestjs/cqrs`. Разделение только на уровне кода: отдельных моделей чтения/записи, событий и event bus нет.
 
 **Правила**
 
@@ -39,9 +49,9 @@
 - **Команда** меняет состояние: `extends Command<TResult>`, handler с `@CommandHandler(XCommand)` реализует `ICommandHandler`.
 - **Запрос** только читает: `extends Query<TResult>`, handler с `@QueryHandler(XQuery)` реализует `IQueryHandler`.
 - Команда/запрос — неизменяемый класс с `public readonly` полями в конструкторе. Данные текущего пользователя (`userId`/`ownerId`) контроллер берёт из `AuthenticatedRequest` и передаёт явным полем.
-- Handler возвращает публичную модель (`PublicUser`, `PublicMeeting`), а не сущность Prisma. Ошибки — HTTP-исключения Nest (`NotFoundException`, `ConflictException` и т. д.).
+- Handler возвращает публичную модель (`PublicUser`, `PublicMeeting`), а не сущность Prisma (исключение — внутренние сообщения `users`, которые нужны `auth` вместе с `passwordHash`). Ошибки — HTTP-исключения Nest (`NotFoundException`, `ConflictException` и т. д.).
 - Модуль импортирует `CqrsModule`; handlers обязательно перечисляются в `providers`, иначе шина их не найдёт.
-- Доступ к данным — через `PrismaService` напрямую (`meetings`) или через сервис (`auth` → `UsersService`). Если логика разрастается, выносите её в сервис, а не в контроллер.
+- Доступ к данным — через `PrismaService` напрямую (`meetings`, `users`), а данные других модулей — через их команды/запросы по `CommandBus`/`QueryBus` (`auth` → `users`). Если логика разрастается, выносите её в сервис, а не в контроллер.
 
 **Раскладка файлов модуля**
 
@@ -64,6 +74,23 @@ src/<module>/
 - Vitest (не Jest), `globals: true`, алиасы путей из `tsconfig.json` (`resolve.tsconfigPaths`).
 - Unit-тесты: `src/**/*.spec.ts` рядом с исходниками.
 - E2E: `test/*.e2e-spec.ts` на `supertest`, отдельный конфиг `vitest.config.e2e.ts` (задаёт `JWT_SECRET`). Требуют запущенный Postgres (`docker compose up -d --wait`) и применённые миграции.
+
+**Запуск**
+
+| Что                   | Команда                                                                                                   | Нужна БД        |
+| --------------------- | --------------------------------------------------------------------------------------------------------- | --------------- |
+| Unit                  | `pnpm --filter api test` (из корня) или `pnpm test` (из `apps/api`)                                       | нет             |
+| Unit в watch-режиме   | `pnpm --filter api test:watch`                                                                            | нет             |
+| Покрытие              | `pnpm --filter api test:cov`                                                                              | нет             |
+| E2E «одной командой»  | `pnpm test:e2e` из корня: поднимет Postgres, применит миграции, запустит e2e                              | да (сам)        |
+| E2E вручную           | `docker compose up -d --wait`, `pnpm --filter api prisma:deploy`, `pnpm --filter api test:e2e`            | да              |
+| Один файл / один тест | `pnpm --filter api test src/users/user.spec.ts`, `... test:e2e test/auth.e2e-spec.ts -t "часть названия"` | зависит от типа |
+| Отладка               | `pnpm --filter api test:debug` (inspector, без параллелизма)                                              | нет             |
+
+- Unit-тесты не ходят в БД: Prisma мокается (`prisma as never`), handlers создаются вручную через `new`.
+- E2E поднимают `AppModule` целиком и пишут в реальную БД; данные не чистятся, поэтому каждый тест использует уникальный email (`randomUUID()`).
+- `pnpm test` из корня запускает только unit; e2e всегда отдельной командой.
+- Перед e2e должен быть сгенерирован клиент Prisma (`pnpm install` или `pnpm --filter api prisma:generate`).
 
 ## Документация
 

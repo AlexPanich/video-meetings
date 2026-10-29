@@ -33,7 +33,7 @@ Per-app commands via `pnpm --filter <web|api> <script>`:
 Single test file / single test name (Vitest in both apps):
 
 ```bash
-pnpm --filter api test src/app.controller.spec.ts
+pnpm --filter api test src/users/user.spec.ts
 pnpm --filter web test src/app/page.test.tsx -t "renders main heading"
 ```
 
@@ -50,13 +50,14 @@ docker compose down           # остановить (-v — удалить да
 
 ## Аутентификация (API)
 
-Модули `auth` (`POST /auth/register`, `POST /auth/login`, `GET /auth/me`) и `users`. Бизнес-логика построена по паттерну CQRS (`@nestjs/cqrs`): контроллер отправляет команды/запросы в `CommandBus`/`QueryBus`, логика — в handlers (`apps/api/src/auth/commands`, `queries`). Правила и раскладка файлов — в разделе «CQRS» файла `apps/api/CLAUDE.md`. JWT (HS256, `@nestjs/jwt`) в `Authorization: Bearer`; пароли хешируются `scrypt` (`node:crypto`). Env: `JWT_SECRET` (обязателен), `JWT_EXPIRES_IN` (по умолчанию `1h`), `DATABASE_URL`. Модуль `meetings` (`POST /meetings`, `GET /meetings`, `GET /meetings/:id`, только для авторизованных; пользователь видит лишь свои встречи) устроен так же. Валидация — глобальный `ValidationPipe` через `APP_PIPE` в `AppModule`.
+Модули `auth` (`POST /auth/register`, `POST /auth/login`, `GET /auth/me`) и `users` (без HTTP-эндпоинтов; `auth` обращается к нему командами/запросами через шины). Бизнес-логика построена по паттерну CQRS (`@nestjs/cqrs`): контроллер отправляет команды/запросы в `CommandBus`/`QueryBus`, логика — в handlers (`apps/api/src/auth/commands`, `queries`). Правила и раскладка файлов — в разделе «CQRS» файла `apps/api/CLAUDE.md`. JWT (HS256, `@nestjs/jwt`) в `Authorization: Bearer`; пароли хешируются `scrypt` (`node:crypto`). Env: `JWT_SECRET` (обязателен), `JWT_EXPIRES_IN` (по умолчанию `1h`), `DATABASE_URL`. Модуль `meetings` (`POST /meetings`, `GET /meetings`, `GET /meetings/:id`, только для авторизованных; пользователь видит лишь свои встречи) устроен так же. Валидация — глобальный `ValidationPipe` через `APP_PIPE` в `AppModule`. Документация API (Swagger/OpenAPI): `http://localhost:3001/docs`, JSON — `/docs-json` (`apps/api/src/swagger.ts`).
 
 ## Testing setup
 
 - Both apps use **Vitest** (not Jest) with `globals: true` — `describe`/`it`/`expect` are available without imports.
 - web: jsdom environment, `@testing-library/react`, jest-dom matchers loaded in `vitest.setup.ts`; tests are `src/**/*.{test,spec}.{ts,tsx}`, colocated with the code.
 - api: unit tests are `*.spec.ts` next to sources; e2e tests are `test/*.e2e-spec.ts` using `supertest`.
+- Unit: `pnpm test` (root, all apps) — no database needed. api e2e: `pnpm test:e2e` (root) starts Postgres, applies migrations and runs them. Full run table and per-file examples: `apps/api/CLAUDE.md`, section «Тесты».
 
 ## Gotchas
 
