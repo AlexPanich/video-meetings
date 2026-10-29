@@ -76,6 +76,10 @@ Prettier (root `.prettierrc`): single quotes, trailing commas, no semicolons, `p
 
 When a change alters the architecture — new/removed apps or shared packages, module or directory structure, tech stack or major dependencies, build/test/dev commands, ports, env vars, or conventions — update the affected documentation **in the same change**: this root `CLAUDE.md`, the `CLAUDE.md` of each touched app (`apps/*/CLAUDE.md`), and any README. Remove statements that are no longer true (e.g. "no shared package yet").
 
+## Git hooks (Husky)
+
+`.husky/pre-commit` запускает `pnpm lint` и `pnpm test` (unit, без БД) перед каждым коммитом; при ошибке коммит блокируется. Хуки ставятся автоматически при `pnpm install` (скрипт `prepare`: `husky`, он же выставляет `core.hooksPath`). e2e в хук не входят — они требуют Postgres, запускайте `pnpm test:e2e` вручную. Обход в крайнем случае — `git commit --no-verify`.
+
 ## Hooks
 
 `.claude/settings.json` defines a `PostToolUse` hook (`Write|Edit`) that runs `prettier --write` on every file Claude changes; files matched by `.prettierignore` or unsupported by Prettier are skipped. No manual formatting is needed after edits.
