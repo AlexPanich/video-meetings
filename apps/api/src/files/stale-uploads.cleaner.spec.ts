@@ -1,6 +1,17 @@
+import { randomUUID } from 'node:crypto'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { STALE_UPLOAD_SWEEP_INTERVAL_MS, StaleUploadsCleaner } from './stale-uploads.cleaner.js'
 
 describe('StaleUploadsCleaner', () => {
+  // сверка с каталогом хранения не должна видеть настоящие файлы разработчика
+  beforeEach(() => {
+    process.env.UPLOADS_DIR = join(tmpdir(), `no-such-uploads-${randomUUID()}`)
+  })
+  afterEach(() => {
+    delete process.env.UPLOADS_DIR
+  })
+
   it('помечает зависшие загрузки как failed', async () => {
     const stale = [{ id: 'f1', meetingId: 'm1', storageName: 'nonexistent-file' }]
     const prisma = {

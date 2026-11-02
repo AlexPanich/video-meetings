@@ -38,10 +38,7 @@ export function receiveSingleFile<T>(
     }
     // после отказа не дочитываем остаток тела: соединение закроется вместе с ответом
     const closeAfterResponse = () => {
-      ;(request as IncomingMessage & { res?: ServerResponse }).res?.setHeader(
-        'Connection',
-        'close',
-      )
+      ;(request as IncomingMessage & { res?: ServerResponse }).res?.setHeader('Connection', 'close')
     }
 
     const tooLarge = () =>
