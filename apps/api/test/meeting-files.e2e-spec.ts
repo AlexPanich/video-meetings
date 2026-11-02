@@ -2,11 +2,13 @@
 import { randomUUID } from 'node:crypto'
 import { readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
+import { connect } from 'node:net'
 import { Test, TestingModule } from '@nestjs/testing'
 import { INestApplication } from '@nestjs/common'
 import request from 'supertest'
 import { App } from 'supertest/types.js'
 import { AppModule } from './../src/app.module.js'
+import { PrismaService } from './../src/prisma/prisma.service.js'
 
 const PASSWORD = 'Str0ngPassw0rd!'
 
@@ -54,7 +56,7 @@ describe('Meeting files (e2e)', () => {
   })
 
   afterEach(async () => {
-    delete process.env.MAX_UPLOAD_SIZE
+    delete process.env.MAX_UPLOAD_BYTES
     await app.close()
   })
 
@@ -118,7 +120,7 @@ describe('Meeting files (e2e)', () => {
     it('413, если файл больше лимита: на диске и в списке ничего не остаётся', async () => {
       const auth = await createUser()
       const meetingId = await createMeeting(auth)
-      process.env.MAX_UPLOAD_SIZE = '10'
+      process.env.MAX_UPLOAD_BYTES = '10'
 
       await upload(auth, meetingId, Buffer.alloc(100, 'x'), 'big.txt').expect(413)
 
@@ -131,9 +133,48 @@ describe('Meeting files (e2e)', () => {
     it('413 сразу по Content-Length, не читая тело', async () => {
       const auth = await createUser()
       const meetingId = await createMeeting(auth)
-      process.env.MAX_UPLOAD_SIZE = '10'
+      process.env.MAX_UPLOAD_BYTES = '10'
 
       await upload(auth, meetingId, Buffer.alloc(200 * 1024, 'x'), 'big.txt').expect(413)
+    })
+
+    it('обрыв соединения посреди загрузки: запись failed, файла на диске нет', async () => {
+      const auth = await createUser()
+      const meetingId = await createMeeting(auth)
+      await app.listen(0)
+      const { port } = app.getHttpServer().address() as { port: number }
+
+      const boundary = 'e2e-boundary'
+      const head =
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="cut.bin"\r\n` +
+        'Content-Type: application/octet-stream\r\n\r\n'
+      const socket = connect(port, '127.0.0.1')
+      await new Promise<void>((resolve) => socket.once('connect', resolve))
+      // заявляем тело в 1 МБ, отправляем лишь часть и рвём соединение
+      socket.write(
+        `POST /meetings/${meetingId}/files HTTP/1.1\r\nHost: localhost\r\n` +
+          `Authorization: ${auth}\r\n` +
+          `Content-Type: multipart/form-data; boundary=${boundary}\r\n` +
+          'Content-Length: 1048576\r\n\r\n' +
+          head,
+      )
+      socket.write(Buffer.alloc(4096, 'x'))
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      socket.destroy()
+
+      const prisma = app.get(PrismaService)
+      await vi.waitFor(
+        async () => {
+          const rows = await prisma.meetingFile.findMany({ where: { meetingId } })
+          expect(rows).toHaveLength(1)
+          expect(rows[0].status).toBe('failed')
+        },
+        { timeout: 5000, interval: 100 },
+      )
+      const dir = join(process.env.UPLOADS_DIR!, meetingId)
+      expect(await readdir(dir).catch(() => [])).toEqual([])
+      const list = await http().get(`/meetings/${meetingId}/files`).set('Authorization', auth)
+      expect(list.body).toEqual([])
     })
 
     it('400, если файл передан не в поле file', async () => {
