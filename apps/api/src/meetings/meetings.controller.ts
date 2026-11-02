@@ -1,7 +1,18 @@
-import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common'
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common'
 import { CommandBus, QueryBus } from '@nestjs/cqrs'
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { type AuthenticatedRequest, JwtAuthGuard } from '../auth/jwt-auth.guard.js'
+import { DeleteMeetingCommand } from './commands/delete-meeting.command.js'
 import { CreateMeetingCommand } from './commands/create-meeting.command.js'
 import { CreateMeetingDto } from './dto.js'
 import { GetMeetingQuery } from './queries/get-meeting.query.js'
@@ -35,5 +46,11 @@ export class MeetingsController {
   @Get(':id')
   get(@Req() req: AuthenticatedRequest, @Param('id') id: string) {
     return this.queryBus.execute(new GetMeetingQuery(req.userId, id))
+  }
+
+  @Delete(':id')
+  @HttpCode(204)
+  remove(@Req() req: AuthenticatedRequest, @Param('id') id: string) {
+    return this.commandBus.execute(new DeleteMeetingCommand(req.userId, id))
   }
 }
