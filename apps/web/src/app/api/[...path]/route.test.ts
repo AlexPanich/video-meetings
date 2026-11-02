@@ -33,7 +33,7 @@ describe('прокси /api/*', () => {
       },
       body: streamOf('--xyz', 'data'),
       duplex: 'half',
-    } as RequestInit)
+    } as ConstructorParameters<typeof NextRequest>[1])
     const arrayBuffer = vi.spyOn(request, 'arrayBuffer')
 
     const response = await POST(request, ctx('meetings', 'm1', 'files'))

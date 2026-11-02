@@ -9,5 +9,6 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: '/',
+  // `/api/*` сюда не добавлять: иначе Next буферизует тело запроса и ломает загрузку больших файлов
+  matcher: ['/', '/meetings/:path*'],
 }
