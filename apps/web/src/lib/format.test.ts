@@ -9,6 +9,12 @@ describe('formatFileSize', () => {
     expect(formatFileSize(500 * 1024 * 1024)).toBe('500 МБ')
     expect(formatFileSize(1.5 * 1024 * 1024 * 1024)).toBe('1,5 ГБ')
   })
+
+  it('на границе единиц переходит к следующей, а не пишет 1024', () => {
+    expect(formatFileSize(1024)).toBe('1 КБ')
+    expect(formatFileSize(1048575)).toBe('1 МБ')
+    expect(formatFileSize(1073741823)).toBe('1 ГБ')
+  })
 })
 
 describe('fileStatusLabel', () => {

@@ -2,11 +2,11 @@
 
 import { File } from '@gravity-ui/icons'
 import { Alert, Button, Card, Chip, Skeleton } from '@heroui/react'
+import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { type FileStatus, getMeetingFiles, type MeetingFile } from '@/lib/api'
+import { ApiError, type FileStatus, getMeetingFiles, type MeetingFile } from '@/lib/api'
 import { fileStatusLabel, formatFileSize } from '@/lib/format'
-
-const dateFormat = new Intl.DateTimeFormat('ru-RU', { dateStyle: 'medium', timeStyle: 'short' })
+import { LocalDateTime } from './local-date-time'
 
 const STATUS_COLOR: Record<FileStatus, 'success' | 'warning' | 'danger'> = {
   uploaded: 'success',
@@ -17,7 +17,13 @@ const STATUS_COLOR: Record<FileStatus, 'success' | 'warning' | 'danger'> = {
 type State = { kind: 'loading' } | { kind: 'error' } | { kind: 'ready'; files: MeetingFile[] }
 
 export function MeetingFiles({ meetingId }: { meetingId: string }) {
-  const [state, setState] = useState<State>({ kind: 'loading' })
+  const router = useRouter()
+  // результат привязан к встрече: после смены meetingId список прежней не показывается
+  const [loaded, setLoaded] = useState<{ meetingId: string; state: State }>({
+    meetingId,
+    state: { kind: 'loading' },
+  })
+  const state: State = loaded.meetingId === meetingId ? loaded.state : { kind: 'loading' }
 
   // каждая попытка (первая и «Повторить») — отдельный запуск эффекта; ответ устаревшей попытки
   // (смена встречи, размонтирование) игнорируется
@@ -26,16 +32,24 @@ export function MeetingFiles({ meetingId }: { meetingId: string }) {
   useEffect(() => {
     let ignore = false
     getMeetingFiles(meetingId).then(
-      (files) => !ignore && setState({ kind: 'ready', files }),
-      () => !ignore && setState({ kind: 'error' }),
+      (files) => !ignore && setLoaded({ meetingId, state: { kind: 'ready', files } }),
+      (error: unknown) => {
+        if (ignore) return
+        // токен отклонён (прокси уже сбросил cookie): повтор не поможет, нужен вход
+        if (error instanceof ApiError && error.status === 401) {
+          router.replace('/login')
+          return
+        }
+        setLoaded({ meetingId, state: { kind: 'error' } })
+      },
     )
     return () => {
       ignore = true
     }
-  }, [meetingId, attempt])
+  }, [meetingId, attempt, router])
 
   const retry = () => {
-    setState({ kind: 'loading' })
+    setLoaded({ meetingId, state: { kind: 'loading' } })
     setAttempt((n) => n + 1)
   }
 
@@ -79,7 +93,7 @@ export function MeetingFiles({ meetingId }: { meetingId: string }) {
                     <p className="text-sm text-muted">
                       <span>{formatFileSize(file.size)}</span>
                       {' · '}
-                      <span>{dateFormat.format(new Date(file.createdAt))}</span>
+                      <LocalDateTime value={file.createdAt} />
                     </p>
                   </div>
                   <Chip color={STATUS_COLOR[file.status]} size="sm">

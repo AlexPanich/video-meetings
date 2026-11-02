@@ -8,7 +8,8 @@ const sizeFormat = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1, us
 export function formatFileSize(bytes: number): string {
   let value = bytes
   let unit = 0
-  while (value >= 1024 && unit < UNITS.length - 1) {
+  // сравниваем уже округлённое значение: 1048575 Б — это «1 МБ», а не «1024 КБ»
+  while (Math.round(value * 10) / 10 >= 1024 && unit < UNITS.length - 1) {
     value /= 1024
     unit++
   }
@@ -22,3 +23,5 @@ const STATUS_LABELS: Record<FileStatus, string> = {
 }
 
 export const fileStatusLabel = (status: FileStatus) => STATUS_LABELS[status]
+
+export const formatParticipants = (count: number) => `${count} участн.`

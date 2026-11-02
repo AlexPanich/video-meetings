@@ -19,6 +19,10 @@ beforeEach(() => {
   fetchMock.mockReset()
 })
 
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
 const lastCall = () => fetchMock.mock.calls[0] as [string, RequestInit & { duplex?: string }]
 
 describe('прокси /api/*', () => {
@@ -93,6 +97,31 @@ describe('прокси /api/*', () => {
     const [, init] = lastCall()
     expect(init.method).toBe('DELETE')
     expect(init.body).toBeUndefined()
+  })
+
+  it('пустое тело (DELETE/POST без данных) не ломает прокси', async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(new Response(null, { status: 204 })))
+    const empty = () =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close()
+        },
+      })
+
+    for (const method of ['DELETE', 'POST']) {
+      const request = new NextRequest('http://localhost/api/meetings/m1/files/f1', {
+        method,
+        headers: withToken,
+        body: empty(),
+        duplex: 'half',
+      } as ConstructorParameters<typeof NextRequest>[1])
+
+      const handler = method === 'DELETE' ? DELETE : POST
+      const response = await handler(request, ctx('meetings', 'm1', 'files', 'f1'))
+
+      expect(response.status).toBe(204)
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
   it('401 от API сбрасывает cookie', async () => {

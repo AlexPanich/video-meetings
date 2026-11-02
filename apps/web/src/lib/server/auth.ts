@@ -55,19 +55,29 @@ export const authenticate = async (path: string, request: Request): Promise<Next
 
 export { unavailable }
 
-// GET в API от имени текущего пользователя; null — нет токена, отказ API или сеть недоступна
-export const apiGet = async <T>(path: string): Promise<T | null> => {
+// Результат GET в API: данные или код ошибки. 401 — нет токена или он отклонён, 0 — API недоступен
+export type ApiResult<T> = { ok: true; data: T } | { ok: false; status: number }
+
+// GET в API от имени текущего пользователя
+export const apiRequest = async <T>(path: string): Promise<ApiResult<T>> => {
   const token = (await cookies()).get(AUTH_COOKIE)?.value
-  if (!token) return null
+  if (!token) return { ok: false, status: 401 }
   try {
     const response = await fetch(`${apiUrl()}${path}`, {
       headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     })
-    return response.ok ? await response.json() : null
+    if (!response.ok) return { ok: false, status: response.status }
+    return { ok: true, data: (await response.json()) as T }
   } catch {
-    return null
+    return { ok: false, status: 0 }
   }
+}
+
+// То же, но без различия причин: null — нет токена, отказ API или сеть недоступна
+export const apiGet = async <T>(path: string): Promise<T | null> => {
+  const result = await apiRequest<T>(path)
+  return result.ok ? result.data : null
 }
 
 // Текущий пользователь для серверных компонентов; null — гость или токен отклонён API

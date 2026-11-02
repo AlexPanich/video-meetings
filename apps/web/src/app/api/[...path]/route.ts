@@ -29,14 +29,15 @@ const handler = async (
   const body = request.body ?? undefined
   let upstream: Response
   try {
-    upstream = await fetch(`${apiUrl()}/${path.join('/')}${request.nextUrl.search}`, {
+    // потоковое тело в fetch обязано быть помечено duplex: 'half' (в типах RequestInit его нет)
+    const init: RequestInit & { duplex?: 'half' } = {
       method: request.method,
       headers,
       body,
-      // потоковое тело в fetch обязано быть помечено duplex: 'half'
-      ...(body ? { duplex: 'half' } : {}),
+      duplex: body ? 'half' : undefined,
       cache: 'no-store',
-    } as RequestInit)
+    }
+    upstream = await fetch(`${apiUrl()}/${path.join('/')}${request.nextUrl.search}`, init)
   } catch {
     return unavailable()
   }
