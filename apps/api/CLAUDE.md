@@ -23,7 +23,7 @@
 ## Структура
 
 - `src/main.ts` — bootstrap, порт `process.env.PORT ?? 3001` (web занимает 3000).
-- `src/app.module.ts` — корневой модуль: подключает `PrismaModule`, `UsersModule`, `AuthModule`, `MeetingsModule` и глобальный `ValidationPipe` (`APP_PIPE`, `whitelist` + `transform`). Корневого контроллера/сервиса нет (`GET /` → 404); новые фичи оформлять отдельными Nest-модулями (`nest g module`) и подключать в `AppModule`.
+- `src/app.module.ts` — корневой модуль: подключает `PrismaModule`, `UsersModule`, `AuthModule`, `MeetingsModule`, `FilesModule` и глобальный `ValidationPipe` (`APP_PIPE`, `whitelist` + `transform`). Корневого контроллера/сервиса нет (`GET /` → 404); новые фичи оформлять отдельными Nest-модулями (`nest g module`) и подключать в `AppModule`.
 - `src/swagger.ts` — `setupSwagger(app)`: OpenAPI на `@nestjs/swagger` (UI `GET /docs`, JSON `GET /docs-json`, Bearer-авторизация). Вызывается в `main.ts`. Схемы DTO строит плагин Nest CLI из `nest-cli.json` (`esmCompatible`, файлы `dto.ts`), поэтому `@ApiProperty` в DTO не нужен; контроллеры помечать `@ApiTags(...)`, защищённые маршруты — `@ApiBearerAuth()`. Плагин работает только при `nest build`/`dev`; в vitest схемы полей DTO не генерируются.
 
 **Модули**
@@ -31,12 +31,13 @@
 - `src/auth` (CQRS) — `POST /auth/register`, `POST /auth/login`, `GET /auth/me`. `commands/` (`RegisterUser*`, `LoginUser*`), `queries/` (`GetCurrentUser*`), `TokenService` (выпуск JWT), `AuthController` (только `CommandBus`/`QueryBus`), `JwtAuthGuard`, `dto.ts`, `password.ts` (scrypt). Данные пользователей берёт у `users` через шины. Экспортирует `JwtModule` и `JwtAuthGuard` для других модулей.
 - `src/users` (CQRS, без контроллера, только для `auth`) — `commands/CreateUser*`, `queries/FindUserByEmail*`, `FindUserById*`. Возвращают сущность Prisma `User` с `passwordHash` — это внутренние сообщения, наружу их не отдавать. `user.ts` — `PublicUser`, `toPublicUser`.
 - `src/meetings` (CQRS) — `POST /meetings`, `GET /meetings`, `GET /meetings/:id`, всё под `JwtAuthGuard`; встречи видны только владельцу, чужая/несуществующая = 404. `commands/CreateMeeting*`, `queries/ListMeetings*`, `GetMeeting*`, модель Prisma `Meeting` (`participants` — `String[]`).
+- `src/files` (CQRS) — файлы встреч: `POST /meetings/:meetingId/files` (multipart, один файл за запрос в поле `file`), `GET /meetings/:meetingId/files`; под `JwtAuthGuard`, доступ только владельцу встречи (чужая/несуществующая = 404). Загрузка: `commands/UploadMeetingFile*` проверяет владельца до чтения тела, затем парсит поток напрямую через `busboy` (`defParamCharset: 'utf8'`, не Multer), создаёт запись `MeetingFile` со статусом `uploading` и стримит файл на диск под `<UPLOADS_DIR>/<meetingId>/<uuid>` (исходное имя — только в БД); при успехе статус `uploaded` и фактический размер, при ошибке файл удаляется, статус `failed`. `queries/ListMeetingFiles*`, `storage.ts` (пути), `meeting-access.ts` (проверка владельца).
 - `src/prisma` — глобальный `PrismaModule`/`PrismaService`.
 
 Новая операция = класс команды/запроса + handler, зарегистрированный в `providers` модуля.
 
 - `prisma/schema.prisma`, `prisma/migrations`, `prisma.config.ts` — Prisma 7. Клиент генерируется в `src/generated/prisma` (не править, в git не входит); `prisma:generate`, `prisma:migrate`, `prisma:deploy`.
-- Env: `JWT_SECRET` (обязателен), `JWT_EXPIRES_IN` (`1h`), `DATABASE_URL` (по умолчанию локальный docker-compose).
+- Env: `JWT_SECRET` (обязателен), `JWT_EXPIRES_IN` (`1h`), `DATABASE_URL` (по умолчанию локальный docker-compose), `UPLOADS_DIR` (каталог хранения файлов встреч, по умолчанию `./uploads`, в git не попадает).
 - `dist/` — артефакты сборки, не править.
 
 ## CQRS
