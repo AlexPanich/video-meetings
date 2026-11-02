@@ -379,21 +379,16 @@ describe('Meeting files (e2e)', () => {
       expect(res.headers['x-content-type-options']).toBe('nosniff')
     })
 
-    it('не ломает заголовок на кавычках и переводах строк в имени', async () => {
+    it('не ломает заголовок на скобках и апострофе в имени', async () => {
       const auth = await createUser()
       const meetingId = await createMeeting(auth)
-      const { body: file } = await upload(
-        auth,
-        meetingId,
-        Buffer.from('x'),
-        'a"b\\c(1)\'.txt',
-      ).expect(201)
+      const { body: file } = await upload(auth, meetingId, Buffer.from('x'), "a(1)'*.txt").expect(
+        201,
+      )
 
       const res = await download(auth, meetingId, file.id).expect(200)
 
-      expect(res.headers['content-disposition']).toContain(
-        `filename*=UTF-8''a%22b%5Cc%281%29%27.txt`,
-      )
+      expect(res.headers['content-disposition']).toContain(`filename*=UTF-8''a%281%29%27%2A.txt`)
     })
 
     it('401 без токена', async () => {

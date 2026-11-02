@@ -34,6 +34,8 @@ describe('Swagger (e2e)', () => {
         '/meetings',
         '/meetings/{id}',
         '/meetings/{meetingId}/files',
+        '/meetings/{meetingId}/files/{fileId}',
+        '/meetings/{meetingId}/files/{fileId}/download',
       ]),
     )
     expect(res.body.components.securitySchemes).toHaveProperty('bearer')
