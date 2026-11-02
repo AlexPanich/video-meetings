@@ -2,7 +2,8 @@
 import { randomUUID } from 'node:crypto'
 import { readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { connect } from 'node:net'
+import type { Server } from 'node:http'
+import { connect, type AddressInfo } from 'node:net'
 import { Test, TestingModule } from '@nestjs/testing'
 import { INestApplication } from '@nestjs/common'
 import request from 'supertest'
@@ -160,7 +161,7 @@ describe('Meeting files (e2e)', () => {
       const auth = await createUser()
       const meetingId = await createMeeting(auth)
       await app.listen(0)
-      const { port } = app.getHttpServer().address() as { port: number }
+      const { port } = (app.getHttpServer() as Server).address() as AddressInfo
 
       const boundary = 'e2e-boundary'
       const head =

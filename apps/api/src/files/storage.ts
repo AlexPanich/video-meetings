@@ -11,7 +11,7 @@ const DEFAULT_MAX_UPLOAD_BYTES = 500 * 1024 * 1024
 const MAX_SUPPORTED_UPLOAD_SIZE = 2_147_483_647
 
 // env читается при каждом вызове, чтобы значение можно было менять в тестах
-export const getUploadsDir = () => resolve(API_ROOT, process.env.UPLOADS_DIR ?? DEFAULT_UPLOADS_DIR)
+export const getUploadsDir = () => resolve(API_ROOT, process.env.UPLOADS_DIR || DEFAULT_UPLOADS_DIR)
 
 // максимальный размер одного файла в байтах (`MAX_UPLOAD_BYTES`, по умолчанию 500 МиБ)
 export const getMaxUploadSize = () => {

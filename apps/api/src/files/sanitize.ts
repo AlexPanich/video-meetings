@@ -5,11 +5,9 @@ const MIME_TYPE_PATTERN = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-
 
 // имя приходит от клиента: убираем управляющие символы, режем по длине, пустое заменяем
 export function sanitizeFileName(name: string | undefined): string {
-  const visible = Array.from(name ?? '').filter((char) => {
-    const code = char.charCodeAt(0)
-    return code > 31 && code !== 127
-  })
-  const cleaned = visible.join('').trim()
+  // Cc — управляющие (в т. ч. C1), Cf — форматирующие (bidi-переопределения вроде U+202E),
+  // Zl/Zp — разделители строк и абзацев
+  const cleaned = (name ?? '').replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '').trim()
   const limited = Array.from(cleaned).slice(0, MAX_NAME_LENGTH).join('').trim()
   return limited || DEFAULT_NAME
 }

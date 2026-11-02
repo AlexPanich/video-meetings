@@ -36,5 +36,5 @@ apps/api/src/generated
 .playwright-mcp
 
 # uploads
-uploads
-uploads-e2e
+/apps/api/uploads
+/apps/api/uploads-e2e

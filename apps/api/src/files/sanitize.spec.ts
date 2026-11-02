@@ -15,6 +15,11 @@ describe('sanitizeFileName', () => {
     expect(sanitizeFileName('a\u0000b\nc\u007f.txt')).toBe('abc.txt')
   })
 
+  it('убирает C1, bidi-переопределения и разделители строк', () => {
+    expect(sanitizeFileName('report\u202Efdp.exe')).toBe('reportfdp.exe')
+    expect(sanitizeFileName('a\u0085b\u2028c.txt')).toBe('abc.txt')
+  })
+
   it('режет имя до 255 символов, не ломая суррогатные пары', () => {
     const name = sanitizeFileName('😀'.repeat(300))
     expect(Array.from(name)).toHaveLength(255)
