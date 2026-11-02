@@ -22,13 +22,13 @@ describe('storage', () => {
   })
 
   it('лимит размера: значение из env, дефолт при мусоре, потолок — Int32', () => {
-    delete process.env.MAX_UPLOAD_SIZE
-    expect(getMaxUploadSize()).toBe(100 * 1024 * 1024)
-    process.env.MAX_UPLOAD_SIZE = '1024'
+    delete process.env.MAX_UPLOAD_BYTES
+    expect(getMaxUploadSize()).toBe(500 * 1024 * 1024)
+    process.env.MAX_UPLOAD_BYTES = '1024'
     expect(getMaxUploadSize()).toBe(1024)
-    process.env.MAX_UPLOAD_SIZE = 'abc'
-    expect(getMaxUploadSize()).toBe(100 * 1024 * 1024)
-    process.env.MAX_UPLOAD_SIZE = '99999999999'
+    process.env.MAX_UPLOAD_BYTES = 'abc'
+    expect(getMaxUploadSize()).toBe(500 * 1024 * 1024)
+    process.env.MAX_UPLOAD_BYTES = '99999999999'
     expect(getMaxUploadSize()).toBe(2_147_483_647)
   })
 })
