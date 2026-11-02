@@ -1,6 +1,6 @@
-/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call -- тела ответов supertest не типизированы */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument -- тела ответов supertest не типизированы */
 import { randomUUID } from 'node:crypto'
-import { readFile, readdir } from 'node:fs/promises'
+import { readFile, readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Server } from 'node:http'
 import { connect, type AddressInfo } from 'node:net'
@@ -37,11 +37,31 @@ describe('Meeting files (e2e)', () => {
     return body.id as string
   }
 
-  const upload = (auth: string, meetingId: string, content: Buffer, filename: string) =>
+  const upload = (
+    auth: string,
+    meetingId: string,
+    content: Buffer,
+    filename: string,
+    contentType = 'text/plain',
+  ) =>
     http()
       .post(`/meetings/${meetingId}/files`)
       .set('Authorization', auth)
-      .attach('file', content, { filename, contentType: 'text/plain' })
+      .attach('file', content, { filename, contentType })
+
+  const binary = (size: number) =>
+    Buffer.from(Array.from({ length: size }, (_, i) => (i * 31) % 256))
+
+  const download = (auth: string, meetingId: string, fileId: string) =>
+    http()
+      .get(`/meetings/${meetingId}/files/${fileId}/download`)
+      .set('Authorization', auth)
+      .buffer(true)
+      .parse((res, cb) => {
+        const chunks: Buffer[] = []
+        res.on('data', (c: Buffer) => chunks.push(c))
+        res.on('end', () => cb(null, Buffer.concat(chunks)))
+      })
 
   beforeAll(() => {
     process.env.UPLOADS_DIR ??= join(process.cwd(), 'uploads-e2e')
@@ -330,6 +350,210 @@ describe('Meeting files (e2e)', () => {
       await upload(owner, meetingId, Buffer.from('x'), 'x.txt').expect(201)
 
       await http().get(`/meetings/${meetingId}/files`).set('Authorization', stranger).expect(404)
+    })
+  })
+
+  describe('GET /meetings/:id/files/:fileId/download', () => {
+    it('отдаёт файл побайтно идентичным с исходным именем и MIME-типом', async () => {
+      const auth = await createUser()
+      const meetingId = await createMeeting(auth)
+      const content = binary(70_000)
+      const { body: file } = await upload(
+        auth,
+        meetingId,
+        content,
+        'Протокол встречи №1.bin',
+        'application/octet-stream',
+      ).expect(201)
+
+      const res = await download(auth, meetingId, file.id).expect(200)
+
+      expect(res.body).toEqual(content)
+      expect(res.headers['content-type']).toContain('application/octet-stream')
+      expect(res.headers['content-length']).toBe(String(content.length))
+      const disposition = res.headers['content-disposition']
+      expect(disposition).toMatch(/^attachment;/)
+      expect(disposition).toContain(
+        `filename*=UTF-8''${encodeURIComponent('Протокол встречи №1.bin')}`,
+      )
+      expect(res.headers['x-content-type-options']).toBe('nosniff')
+    })
+
+    it('не ломает заголовок на кавычках и переводах строк в имени', async () => {
+      const auth = await createUser()
+      const meetingId = await createMeeting(auth)
+      const { body: file } = await upload(
+        auth,
+        meetingId,
+        Buffer.from('x'),
+        'a"b\\c(1)\'.txt',
+      ).expect(201)
+
+      const res = await download(auth, meetingId, file.id).expect(200)
+
+      expect(res.headers['content-disposition']).toContain(
+        `filename*=UTF-8''a%22b%5Cc%281%29%27.txt`,
+      )
+    })
+
+    it('401 без токена', async () => {
+      await http().get(`/meetings/${randomUUID()}/files/${randomUUID()}/download`).expect(401)
+    })
+
+    it('404 для чужой встречи', async () => {
+      const owner = await createUser()
+      const stranger = await createUser()
+      const meetingId = await createMeeting(owner)
+      const { body: file } = await upload(owner, meetingId, Buffer.from('x'), 'x.txt').expect(201)
+
+      await download(stranger, meetingId, file.id).expect(404)
+    })
+
+    it('404 для файла другой своей встречи и несуществующего файла', async () => {
+      const auth = await createUser()
+      const first = await createMeeting(auth)
+      const second = await createMeeting(auth)
+      const { body: file } = await upload(auth, first, Buffer.from('x'), 'x.txt').expect(201)
+
+      await download(auth, second, file.id).expect(404)
+      await download(auth, first, randomUUID()).expect(404)
+    })
+
+    it('404 для файла не в статусе uploaded', async () => {
+      const auth = await createUser()
+      const meetingId = await createMeeting(auth)
+      const failed = await app.get(PrismaService).meetingFile.create({
+        data: {
+          meetingId,
+          name: 'f.txt',
+          storageName: randomUUID(),
+          mimeType: 'text/plain',
+          status: 'failed',
+        },
+      })
+
+      await download(auth, meetingId, failed.id).expect(404)
+    })
+
+    it('404, если файл пропал с диска, а не 500', async () => {
+      const auth = await createUser()
+      const meetingId = await createMeeting(auth)
+      const { body: file } = await upload(auth, meetingId, Buffer.from('x'), 'x.txt').expect(201)
+      const dir = join(process.env.UPLOADS_DIR!, meetingId)
+      await rm(dir, { recursive: true })
+
+      await download(auth, meetingId, file.id).expect(404)
+    })
+  })
+
+  describe('DELETE /meetings/:id/files/:fileId', () => {
+    it('удаляет запись из БД и файл с диска', async () => {
+      const auth = await createUser()
+      const meetingId = await createMeeting(auth)
+      const { body: keep } = await upload(auth, meetingId, Buffer.from('keep'), 'keep.txt').expect(
+        201,
+      )
+      const { body: gone } = await upload(auth, meetingId, Buffer.from('gone'), 'gone.txt').expect(
+        201,
+      )
+      const dir = join(process.env.UPLOADS_DIR!, meetingId)
+      expect(await readdir(dir)).toHaveLength(2)
+
+      await http()
+        .delete(`/meetings/${meetingId}/files/${gone.id}`)
+        .set('Authorization', auth)
+        .expect(204)
+
+      expect(
+        await app.get(PrismaService).meetingFile.findUnique({ where: { id: gone.id } }),
+      ).toBeNull()
+      expect(await readdir(dir)).toHaveLength(1)
+      const list = await http().get(`/meetings/${meetingId}/files`).set('Authorization', auth)
+      expect(list.body.map((f: { id: string }) => f.id)).toEqual([keep.id])
+      await download(auth, meetingId, gone.id).expect(404)
+    })
+
+    it('повторное удаление даёт 404', async () => {
+      const auth = await createUser()
+      const meetingId = await createMeeting(auth)
+      const { body: file } = await upload(auth, meetingId, Buffer.from('x'), 'x.txt').expect(201)
+      const remove = () =>
+        http().delete(`/meetings/${meetingId}/files/${file.id}`).set('Authorization', auth)
+
+      await remove().expect(204)
+      await remove().expect(404)
+    })
+
+    it('401 без токена', async () => {
+      await http().delete(`/meetings/${randomUUID()}/files/${randomUUID()}`).expect(401)
+    })
+
+    it('404 для чужой встречи: файл остаётся', async () => {
+      const owner = await createUser()
+      const stranger = await createUser()
+      const meetingId = await createMeeting(owner)
+      const { body: file } = await upload(owner, meetingId, Buffer.from('x'), 'x.txt').expect(201)
+
+      await http()
+        .delete(`/meetings/${meetingId}/files/${file.id}`)
+        .set('Authorization', stranger)
+        .expect(404)
+
+      expect(await readdir(join(process.env.UPLOADS_DIR!, meetingId))).toHaveLength(1)
+      await download(owner, meetingId, file.id).expect(200)
+    })
+
+    it('404 для файла другой встречи', async () => {
+      const auth = await createUser()
+      const first = await createMeeting(auth)
+      const second = await createMeeting(auth)
+      const { body: file } = await upload(auth, first, Buffer.from('x'), 'x.txt').expect(201)
+
+      await http()
+        .delete(`/meetings/${second}/files/${file.id}`)
+        .set('Authorization', auth)
+        .expect(404)
+    })
+  })
+
+  describe('DELETE /meetings/:id', () => {
+    it('удаляет встречу, записи файлов и физические файлы с диска', async () => {
+      const auth = await createUser()
+      const meetingId = await createMeeting(auth)
+      await upload(auth, meetingId, Buffer.from('один'), 'a.txt').expect(201)
+      await upload(auth, meetingId, Buffer.from('два'), 'b.txt').expect(201)
+      const dir = join(process.env.UPLOADS_DIR!, meetingId)
+      expect(await readdir(dir)).toHaveLength(2)
+
+      await http().delete(`/meetings/${meetingId}`).set('Authorization', auth).expect(204)
+
+      await expect(readdir(dir)).rejects.toThrow()
+      expect(await app.get(PrismaService).meetingFile.count({ where: { meetingId } })).toBe(0)
+      await http().get(`/meetings/${meetingId}`).set('Authorization', auth).expect(404)
+    })
+
+    it('удаляет встречу без файлов', async () => {
+      const auth = await createUser()
+      const meetingId = await createMeeting(auth)
+
+      await http().delete(`/meetings/${meetingId}`).set('Authorization', auth).expect(204)
+      await http().delete(`/meetings/${meetingId}`).set('Authorization', auth).expect(404)
+    })
+
+    it('401 без токена', async () => {
+      await http().delete(`/meetings/${randomUUID()}`).expect(401)
+    })
+
+    it('404 для чужой встречи: встреча и файлы остаются', async () => {
+      const owner = await createUser()
+      const stranger = await createUser()
+      const meetingId = await createMeeting(owner)
+      await upload(owner, meetingId, Buffer.from('x'), 'x.txt').expect(201)
+
+      await http().delete(`/meetings/${meetingId}`).set('Authorization', stranger).expect(404)
+
+      await http().get(`/meetings/${meetingId}`).set('Authorization', owner).expect(200)
+      expect(await readdir(join(process.env.UPLOADS_DIR!, meetingId))).toHaveLength(1)
     })
   })
 })
