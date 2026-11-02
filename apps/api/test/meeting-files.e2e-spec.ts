@@ -130,6 +130,24 @@ describe('Meeting files (e2e)', () => {
       expect(list.body).toEqual([])
     })
 
+    it('принимает файл ровно в размер лимита', async () => {
+      const auth = await createUser()
+      const meetingId = await createMeeting(auth)
+      process.env.MAX_UPLOAD_BYTES = '10'
+
+      const res = await upload(auth, meetingId, Buffer.alloc(10, 'x'), 'edge.txt').expect(201)
+
+      expect(res.body).toMatchObject({ size: 10, status: 'uploaded' })
+    })
+
+    it('413 на файл на байт больше лимита', async () => {
+      const auth = await createUser()
+      const meetingId = await createMeeting(auth)
+      process.env.MAX_UPLOAD_BYTES = '10'
+
+      await upload(auth, meetingId, Buffer.alloc(11, 'x'), 'edge.txt').expect(413)
+    })
+
     it('413 сразу по Content-Length, не читая тело', async () => {
       const auth = await createUser()
       const meetingId = await createMeeting(auth)

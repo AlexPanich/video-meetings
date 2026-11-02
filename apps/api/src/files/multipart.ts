@@ -41,7 +41,8 @@ export function receiveSingleFile<T>(
       parser = busboy({
         headers: request.headers,
         defParamCharset: 'utf8',
-        limits: { files: 1, fields: 0, fileSize: maxSize },
+        // busboy шлёт `limit` уже на файле ровно в fileSize байт, а допустимо ровно maxSize: берём на байт больше
+        limits: { files: 1, fields: 0, fileSize: maxSize + 1 },
       })
     } catch {
       reject(new BadRequestException('Ожидается multipart/form-data'))
