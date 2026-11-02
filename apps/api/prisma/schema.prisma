@@ -26,8 +26,30 @@ model Meeting {
   participants String[]
   ownerId      String
   owner        User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  files        MeetingFile[]
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   @@index([ownerId])
+}
+
+enum FileStatus {
+  uploading
+  uploaded
+  failed
+}
+
+model MeetingFile {
+  id          String     @id @default(uuid())
+  meetingId   String
+  meeting     Meeting    @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  name        String
+  storageName String     @unique
+  size        Int        @default(0)
+  mimeType    String
+  status      FileStatus @default(uploading)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([meetingId])
 }
