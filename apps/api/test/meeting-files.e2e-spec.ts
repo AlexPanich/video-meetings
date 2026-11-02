@@ -54,6 +54,7 @@ describe('Meeting files (e2e)', () => {
   })
 
   afterEach(async () => {
+    delete process.env.MAX_UPLOAD_SIZE
     await app.close()
   })
 
@@ -112,6 +113,67 @@ describe('Meeting files (e2e)', () => {
       await upload(auth, meetingId, Buffer.from('два'), 'b.txt').expect(201)
 
       expect(await readdir(join(process.env.UPLOADS_DIR!, meetingId))).toHaveLength(2)
+    })
+
+    it('413, если файл больше лимита: на диске и в списке ничего не остаётся', async () => {
+      const auth = await createUser()
+      const meetingId = await createMeeting(auth)
+      process.env.MAX_UPLOAD_SIZE = '10'
+
+      await upload(auth, meetingId, Buffer.alloc(100, 'x'), 'big.txt').expect(413)
+
+      const dir = join(process.env.UPLOADS_DIR!, meetingId)
+      expect(await readdir(dir).catch(() => [])).toEqual([])
+      const list = await http().get(`/meetings/${meetingId}/files`).set('Authorization', auth)
+      expect(list.body).toEqual([])
+    })
+
+    it('413 сразу по Content-Length, не читая тело', async () => {
+      const auth = await createUser()
+      const meetingId = await createMeeting(auth)
+      process.env.MAX_UPLOAD_SIZE = '10'
+
+      await upload(auth, meetingId, Buffer.alloc(200 * 1024, 'x'), 'big.txt').expect(413)
+    })
+
+    it('400, если файл передан не в поле file', async () => {
+      const auth = await createUser()
+      const meetingId = await createMeeting(auth)
+
+      await http()
+        .post(`/meetings/${meetingId}/files`)
+        .set('Authorization', auth)
+        .attach('document', Buffer.from('x'), 'x.txt')
+        .expect(400)
+
+      const list = await http().get(`/meetings/${meetingId}/files`).set('Authorization', auth)
+      expect(list.body).toEqual([])
+    })
+
+    it('400 при двух файлах в запросе, ни один не сохраняется', async () => {
+      const auth = await createUser()
+      const meetingId = await createMeeting(auth)
+
+      await http()
+        .post(`/meetings/${meetingId}/files`)
+        .set('Authorization', auth)
+        .attach('file', Buffer.from('один'), 'a.txt')
+        .attach('file', Buffer.from('два'), 'b.txt')
+        .expect(400)
+
+      const list = await http().get(`/meetings/${meetingId}/files`).set('Authorization', auth)
+      expect(list.body).toEqual([])
+    })
+
+    it('обрезает слишком длинное имя файла до 255 символов', async () => {
+      const auth = await createUser()
+      const meetingId = await createMeeting(auth)
+
+      const res = await upload(auth, meetingId, Buffer.from('x'), `${'a'.repeat(400)}.txt`).expect(
+        201,
+      )
+
+      expect(res.body.name).toHaveLength(255)
     })
 
     it('400, если в теле нет файла', async () => {
