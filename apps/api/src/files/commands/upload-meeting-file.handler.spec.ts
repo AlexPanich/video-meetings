@@ -3,7 +3,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
-import { PayloadTooLargeException } from '@nestjs/common'
+import { NotFoundException, PayloadTooLargeException } from '@nestjs/common'
 import type { QueryBus } from '@nestjs/cqrs'
 import { UploadMeetingFileHandler } from './upload-meeting-file.handler.js'
 import { UploadMeetingFileCommand } from './upload-meeting-file.command.js'
@@ -45,12 +45,10 @@ describe('UploadMeetingFileHandler', () => {
     process.env.UPLOADS_DIR = uploadsDir
     prisma = {
       meetingFile: {
-        create: vi.fn().mockImplementation(({ data }: { data: object }) => ({
-          ...record,
-          ...data,
-          createdAt: new Date(),
-          size: 0,
-        })),
+        create: vi.fn().mockImplementation(({ data }: { data: object }) =>
+          // как у Prisma: возвращается промис
+          Promise.resolve({ ...record, ...data, createdAt: new Date(), size: 0 }),
+        ),
         update: vi
           .fn()
           .mockImplementation(({ data }: { data: object }) => ({ ...record, ...data })),
@@ -174,5 +172,30 @@ describe('UploadMeetingFileHandler', () => {
       where: { id: 'f1' },
       data: { status: 'failed' },
     })
+  })
+
+  it('встречу удалили во время загрузки (P2025 при финализации): 404, файл и каталог убраны', async () => {
+    // и финализация, и пометка failed упираются в уже удалённую запись
+    prisma.meetingFile.update.mockRejectedValue(
+      Object.assign(new Error('not found'), { code: 'P2025' }),
+    )
+    const body = multipartBody(Buffer.from('data'))
+    const request = fakeRequest(body)
+    const promise = run(request)
+    request.end(body)
+
+    await expect(promise).rejects.toBeInstanceOf(NotFoundException)
+
+    expect(await readdir(uploadsDir)).toEqual([])
+  })
+
+  it('встречу удалили между проверкой владельца и созданием записи (P2003): 404', async () => {
+    prisma.meetingFile.create.mockRejectedValue(Object.assign(new Error('fk'), { code: 'P2003' }))
+    const body = multipartBody(Buffer.from('data'))
+    const request = fakeRequest(body)
+    const promise = run(request)
+    request.end(body)
+
+    await expect(promise).rejects.toBeInstanceOf(NotFoundException)
   })
 })

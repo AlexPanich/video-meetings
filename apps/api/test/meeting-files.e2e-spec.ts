@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument -- тела ответов supertest не типизированы */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call -- тела ответов supertest не типизированы */
 import { randomUUID } from 'node:crypto'
 import { readFile, readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -48,6 +48,9 @@ describe('Meeting files (e2e)', () => {
       .post(`/meetings/${meetingId}/files`)
       .set('Authorization', auth)
       .attach('file', content, { filename, contentType })
+
+  // тела ответов supertest не типизированы: достаём id явно
+  const idOf = (body: unknown) => (body as { id: string }).id
 
   const binary = (size: number) =>
     Buffer.from(Array.from({ length: size }, (_, i) => (i * 31) % 256))
@@ -366,7 +369,7 @@ describe('Meeting files (e2e)', () => {
         'application/octet-stream',
       ).expect(201)
 
-      const res = await download(auth, meetingId, file.id).expect(200)
+      const res = await download(auth, meetingId, idOf(file)).expect(200)
 
       expect(res.body).toEqual(content)
       expect(res.headers['content-type']).toContain('application/octet-stream')
@@ -386,7 +389,7 @@ describe('Meeting files (e2e)', () => {
         201,
       )
 
-      const res = await download(auth, meetingId, file.id).expect(200)
+      const res = await download(auth, meetingId, idOf(file)).expect(200)
 
       expect(res.headers['content-disposition']).toContain(`filename*=UTF-8''a%281%29%27%2A.txt`)
     })
@@ -401,7 +404,7 @@ describe('Meeting files (e2e)', () => {
       const meetingId = await createMeeting(owner)
       const { body: file } = await upload(owner, meetingId, Buffer.from('x'), 'x.txt').expect(201)
 
-      await download(stranger, meetingId, file.id).expect(404)
+      await download(stranger, meetingId, idOf(file)).expect(404)
     })
 
     it('404 для файла другой своей встречи и несуществующего файла', async () => {
@@ -410,7 +413,7 @@ describe('Meeting files (e2e)', () => {
       const second = await createMeeting(auth)
       const { body: file } = await upload(auth, first, Buffer.from('x'), 'x.txt').expect(201)
 
-      await download(auth, second, file.id).expect(404)
+      await download(auth, second, idOf(file)).expect(404)
       await download(auth, first, randomUUID()).expect(404)
     })
 
@@ -437,7 +440,7 @@ describe('Meeting files (e2e)', () => {
       const dir = join(process.env.UPLOADS_DIR!, meetingId)
       await rm(dir, { recursive: true })
 
-      await download(auth, meetingId, file.id).expect(404)
+      await download(auth, meetingId, idOf(file)).expect(404)
     })
   })
 
@@ -455,17 +458,17 @@ describe('Meeting files (e2e)', () => {
       expect(await readdir(dir)).toHaveLength(2)
 
       await http()
-        .delete(`/meetings/${meetingId}/files/${gone.id}`)
+        .delete(`/meetings/${meetingId}/files/${idOf(gone)}`)
         .set('Authorization', auth)
         .expect(204)
 
       expect(
-        await app.get(PrismaService).meetingFile.findUnique({ where: { id: gone.id } }),
+        await app.get(PrismaService).meetingFile.findUnique({ where: { id: idOf(gone) } }),
       ).toBeNull()
       expect(await readdir(dir)).toHaveLength(1)
       const list = await http().get(`/meetings/${meetingId}/files`).set('Authorization', auth)
       expect(list.body.map((f: { id: string }) => f.id)).toEqual([keep.id])
-      await download(auth, meetingId, gone.id).expect(404)
+      await download(auth, meetingId, idOf(gone)).expect(404)
     })
 
     it('повторное удаление даёт 404', async () => {
@@ -473,7 +476,9 @@ describe('Meeting files (e2e)', () => {
       const meetingId = await createMeeting(auth)
       const { body: file } = await upload(auth, meetingId, Buffer.from('x'), 'x.txt').expect(201)
       const remove = () =>
-        http().delete(`/meetings/${meetingId}/files/${file.id}`).set('Authorization', auth)
+        http()
+          .delete(`/meetings/${meetingId}/files/${idOf(file)}`)
+          .set('Authorization', auth)
 
       await remove().expect(204)
       await remove().expect(404)
@@ -490,12 +495,12 @@ describe('Meeting files (e2e)', () => {
       const { body: file } = await upload(owner, meetingId, Buffer.from('x'), 'x.txt').expect(201)
 
       await http()
-        .delete(`/meetings/${meetingId}/files/${file.id}`)
+        .delete(`/meetings/${meetingId}/files/${idOf(file)}`)
         .set('Authorization', stranger)
         .expect(404)
 
       expect(await readdir(join(process.env.UPLOADS_DIR!, meetingId))).toHaveLength(1)
-      await download(owner, meetingId, file.id).expect(200)
+      await download(owner, meetingId, idOf(file)).expect(200)
     })
 
     it('404 для файла другой встречи', async () => {
@@ -505,7 +510,7 @@ describe('Meeting files (e2e)', () => {
       const { body: file } = await upload(auth, first, Buffer.from('x'), 'x.txt').expect(201)
 
       await http()
-        .delete(`/meetings/${second}/files/${file.id}`)
+        .delete(`/meetings/${second}/files/${idOf(file)}`)
         .set('Authorization', auth)
         .expect(404)
     })

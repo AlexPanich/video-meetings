@@ -25,3 +25,11 @@ export const getMeetingDir = (meetingId: string) => join(getUploadsDir(), meetin
 
 export const getStoragePath = (meetingId: string, storageName: string) =>
   join(getMeetingDir(meetingId), storageName)
+
+// идентификатор встречи/файла в путях — всегда uuid; всё остальное (`''`, `.`, `..`, разделители)
+// не должно попадать в рекурсивное удаление
+export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+// один сегмент пути без выхода за пределы каталога
+export const isSafePathSegment = (value: string) =>
+  value !== '' && value !== '.' && value !== '..' && !/[\\/\0]/.test(value)

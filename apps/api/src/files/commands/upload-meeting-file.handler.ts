@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, rmdir } from 'node:fs/promises'
 import { pipeline } from 'node:stream/promises'
-import { Logger } from '@nestjs/common'
+import { Logger, NotFoundException } from '@nestjs/common'
 import { CommandHandler, type ICommandHandler, QueryBus } from '@nestjs/cqrs'
 import type { FileInfo } from 'busboy'
 import type { MeetingFile } from '../../generated/prisma/client.js'
@@ -12,6 +12,7 @@ import { discardMeetingFile } from '../discard-file.js'
 import { type PublicMeetingFile, toPublicMeetingFile } from '../meeting-file.js'
 import { receiveSingleFile } from '../multipart.js'
 import { sanitizeFileName, sanitizeMimeType } from '../sanitize.js'
+import { prismaErrorCode } from '../stored-file.js'
 import { getMaxUploadSize, getMeetingDir, getStoragePath } from '../storage.js'
 import { UploadMeetingFileCommand } from './upload-meeting-file.command.js'
 
@@ -47,15 +48,21 @@ export class UploadMeetingFileHandler implements ICommandHandler<UploadMeetingFi
   ): Promise<MeetingFile> {
     // на диске файл лежит под сгенерированным именем, исходное имя — только в БД
     const storageName = randomUUID()
-    const record = await this.prisma.meetingFile.create({
-      data: {
-        meetingId,
-        name: sanitizeFileName(filename),
-        storageName,
-        mimeType: sanitizeMimeType(mimeType),
-        status: 'uploading',
-      },
-    })
+    const record = await this.prisma.meetingFile
+      .create({
+        data: {
+          meetingId,
+          name: sanitizeFileName(filename),
+          storageName,
+          mimeType: sanitizeMimeType(mimeType),
+          status: 'uploading',
+        },
+      })
+      .catch((error: unknown) => {
+        // встречу удалили после проверки владельца
+        if (prismaErrorCode(error) === 'P2003') throw new NotFoundException('Встреча не найдена')
+        throw error
+      })
 
     try {
       await mkdir(getMeetingDir(meetingId), { recursive: true })
@@ -67,6 +74,12 @@ export class UploadMeetingFileHandler implements ICommandHandler<UploadMeetingFi
       })
     } catch (error) {
       await discardMeetingFile(this.prisma, record, this.logger)
+      if (prismaErrorCode(error) === 'P2025') {
+        // встречу (а с ней и запись) удалили во время загрузки: убираем за собой и каталог,
+        // который мог воскреснуть из-за mkdir; rmdir удаляет только пустой
+        await rmdir(getMeetingDir(meetingId)).catch(() => undefined)
+        throw new NotFoundException('Встреча не найдена')
+      }
       throw error
     }
   }

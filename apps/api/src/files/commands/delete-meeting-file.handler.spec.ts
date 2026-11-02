@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { NotFoundException } from '@nestjs/common'
+import { Logger, NotFoundException } from '@nestjs/common'
 import type { QueryBus } from '@nestjs/cqrs'
 import { DeleteMeetingFileCommand } from './delete-meeting-file.command.js'
 import { DeleteMeetingFileHandler } from './delete-meeting-file.handler.js'
@@ -22,7 +22,7 @@ describe('DeleteMeetingFileHandler', () => {
     await mkdir(join(uploadsDir, 'm1'))
     prisma = {
       meetingFile: {
-        findFirst: vi.fn().mockResolvedValue({ id: 'f1', storageName: 'stored' }),
+        findFirst: vi.fn().mockResolvedValue({ id: 'f1', meetingId: 'm1', storageName: 'stored' }),
         deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
     }
@@ -75,5 +75,17 @@ describe('DeleteMeetingFileHandler', () => {
     await expect(handler.execute(command)).rejects.toBeInstanceOf(NotFoundException)
 
     expect(prisma.meetingFile.findFirst).not.toHaveBeenCalled()
+  })
+
+  it('сбой удаления файла с диска только логируется: запись уже удалена, ответ успешный', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
+    // на месте файла каталог: unlink падает с EISDIR/EPERM, а не ENOENT
+    await mkdir(join(uploadsDir, 'm1', 'stored'))
+
+    await expect(handler.execute(command)).resolves.toBeUndefined()
+
+    expect(prisma.meetingFile.deleteMany).toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Не удалось удалить файл f1'))
+    warn.mockRestore()
   })
 })

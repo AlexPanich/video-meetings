@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common'
 import { PrismaService } from '../prisma/prisma.service.js'
 import { discardMeetingFile } from './discard-file.js'
+import { removeOrphanFiles } from './orphan-files.js'
 
 // запись, которая слишком долго остаётся в `uploading`, осталась от упавшего процесса;
 // запас в несколько часов нужен, чтобы не прервать живую загрузку на очень медленном канале
@@ -41,8 +42,11 @@ export class StaleUploadsCleaner implements OnApplicationBootstrap, OnModuleDest
       })
       for (const file of stale) await discardMeetingFile(this.prisma, file, this.logger)
       if (stale.length > 0) this.logger.log(`Закрыто зависших загрузок: ${stale.length}`)
+      await removeOrphanFiles(this.prisma, this.logger)
     } catch (error) {
-      this.logger.error(`Не удалось закрыть зависшие загрузки: ${String(error)}`)
+      this.logger.error(
+        `Не удалось закрыть зависшие загрузки или убрать осиротевшие файлы: ${String(error)}`,
+      )
     }
   }
 }
