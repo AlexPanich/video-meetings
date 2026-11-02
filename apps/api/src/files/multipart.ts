@@ -1,4 +1,4 @@
-import type { IncomingMessage } from 'node:http'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Readable } from 'node:stream'
 import { BadRequestException, PayloadTooLargeException } from '@nestjs/common'
 import busboy, { type FileInfo } from 'busboy'
@@ -25,13 +25,38 @@ export function receiveSingleFile<T>(
   request: IncomingMessage,
   { maxSize, onFile, rollback }: ReceiveOptions<T>,
 ): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
+  return new Promise<T>((resolveOuter, rejectOuter) => {
+    // после завершения (успеха или отказа) поздние события запроса уже ни на что не влияют
+    let done = false
+    const resolve = (value: T) => {
+      done = true
+      resolveOuter(value)
+    }
+    const reject = (error: Error) => {
+      done = true
+      rejectOuter(error)
+    }
+    // после отказа не дочитываем остаток тела: соединение закроется вместе с ответом
+    const closeAfterResponse = () => {
+      ;(request as IncomingMessage & { res?: ServerResponse }).res?.setHeader(
+        'Connection',
+        'close',
+      )
+    }
+
     const tooLarge = () =>
       new PayloadTooLargeException(`Размер файла превышает лимит ${maxSize} байт`)
 
     // честный клиент отсекается сразу, не дожидаясь начала загрузки
     if (Number(request.headers['content-length']) > maxSize + MULTIPART_OVERHEAD) {
+      closeAfterResponse()
       reject(tooLarge())
+      return
+    }
+
+    // клиент мог отключиться, пока проверялся владелец: событий close/error уже не будет
+    if (request.destroyed) {
+      reject(new BadRequestException('Загрузка прервана'))
       return
     }
 
@@ -54,8 +79,9 @@ export function receiveSingleFile<T>(
     let failed = false
 
     const fail = (error: Error) => {
-      if (failed) return
+      if (failed || done) return
       failed = true
+      closeAfterResponse()
       request.unpipe(parser)
       request.resume()
       // уже дочитанный поток трогать нельзя: destroy(error) выбросит необработанный 'error'
@@ -86,7 +112,7 @@ export function receiveSingleFile<T>(
       stream.on('error', () => undefined) // ошибку получает pipeline в onFile
       stream.on('limit', () => fail(tooLarge()))
       stored = onFile(stream, info)
-      stored.catch(() => undefined) // ошибка уйдёт через 'close' или fail
+      stored.catch(fail) // сбой записи (БД, диск) должен отклонить запрос, а не повиснуть
     })
     parser.on('filesLimit', () => fail(new BadRequestException('Допускается один файл за запрос')))
     parser.on('error', () => fail(new BadRequestException('Некорректное тело multipart-запроса')))

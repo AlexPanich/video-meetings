@@ -1,5 +1,5 @@
 import type { IncomingMessage } from 'node:http'
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -21,13 +21,13 @@ const multipartBody = (content: Buffer, filename = 'notes.txt') =>
   ])
 
 // минимальная замена IncomingMessage: поток с заголовками и признаком полностью принятого тела
-const fakeRequest = (body: Buffer, { complete = true } = {}) => {
+const fakeRequest = (body: Buffer) => {
   const request = new PassThrough() as unknown as PassThrough & IncomingMessage
   request.headers = {
     'content-type': `multipart/form-data; boundary=${BOUNDARY}`,
     'content-length': String(body.length),
   }
-  request.complete = complete
+  request.complete = true
   return request
 }
 
@@ -113,13 +113,64 @@ describe('UploadMeetingFileHandler', () => {
     const promise = run(request)
     // отправляем начало файла и роняем поток, не дойдя до конца тела
     request.write(body.subarray(0, body.length - 200))
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    // ждём, пока начнётся запись файла на диск, и только потом роняем поток
+    await vi.waitFor(async () => expect(await filesOnDisk()).toHaveLength(1))
     request.destroy(new Error('socket hang up'))
 
     await expect(promise).rejects.toThrow('Загрузка прервана')
 
     expect(await filesOnDisk()).toEqual([])
     expect(prisma.meetingFile.update).toHaveBeenCalledWith({
+      where: { id: 'f1' },
+      data: { status: 'failed' },
+    })
+  })
+
+  it('сбой записи в БД не повисает: запрос отклоняется', async () => {
+    prisma.meetingFile.create.mockRejectedValue(new Error('db down'))
+    const body = multipartBody(Buffer.from('data'))
+    const request = fakeRequest(body)
+    const promise = run(request)
+    request.end(body)
+
+    await expect(promise).rejects.toThrow('db down')
+  })
+
+  it('сбой записи на диск не повисает: запрос отклоняется, запись failed', async () => {
+    process.env.UPLOADS_DIR = join(uploadsDir, 'file-in-the-way')
+    await writeFile(process.env.UPLOADS_DIR, 'не каталог') // mkdir упадёт с ENOTDIR/EEXIST
+    const body = multipartBody(Buffer.from('data'))
+    const request = fakeRequest(body)
+    const promise = run(request)
+    request.end(body)
+
+    await expect(promise).rejects.toThrow()
+    expect(prisma.meetingFile.update).toHaveBeenCalledWith({
+      where: { id: 'f1' },
+      data: { status: 'failed' },
+    })
+  })
+
+  it('клиент отключился до начала чтения тела: запрос отклоняется', async () => {
+    const body = multipartBody(Buffer.from('data'))
+    const request = fakeRequest(body)
+    request.destroy()
+
+    await expect(run(request)).rejects.toThrow('Загрузка прервана')
+  })
+
+  it('поздняя ошибка запроса после успешной загрузки не откатывает файл', async () => {
+    const body = multipartBody(Buffer.from('data'))
+    const request = fakeRequest(body)
+    const promise = run(request)
+    request.end(body)
+    await promise
+
+    request.emit('error', new Error('ECONNRESET'))
+    await new Promise((resolve) => setImmediate(resolve))
+
+    expect(await filesOnDisk()).toHaveLength(1)
+    expect(prisma.meetingFile.update).not.toHaveBeenCalledWith({
       where: { id: 'f1' },
       data: { status: 'failed' },
     })
