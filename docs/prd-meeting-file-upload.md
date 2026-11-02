@@ -2,6 +2,7 @@
 
 **Дата**: 2026-11-02
 **Статус**: Draft
+**Ресерч**: @docs/research-meeting-file-upload.md
 
 ## Цель
 
