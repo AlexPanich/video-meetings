@@ -1,4 +1,4 @@
-import { StaleUploadsCleaner } from './stale-uploads.cleaner.js'
+import { STALE_UPLOAD_SWEEP_INTERVAL_MS, StaleUploadsCleaner } from './stale-uploads.cleaner.js'
 
 describe('StaleUploadsCleaner', () => {
   it('помечает зависшие загрузки как failed', async () => {
@@ -27,5 +27,25 @@ describe('StaleUploadsCleaner', () => {
     await expect(
       new StaleUploadsCleaner(prisma as never).onApplicationBootstrap(),
     ).resolves.toBeUndefined()
+  })
+
+  it('повторяет проверку по таймеру и останавливается при завершении модуля', async () => {
+    vi.useFakeTimers()
+    try {
+      const prisma = { meetingFile: { findMany: vi.fn().mockResolvedValue([]) } }
+      const cleaner = new StaleUploadsCleaner(prisma as never)
+
+      await cleaner.onApplicationBootstrap()
+      expect(prisma.meetingFile.findMany).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(STALE_UPLOAD_SWEEP_INTERVAL_MS)
+      expect(prisma.meetingFile.findMany).toHaveBeenCalledTimes(2)
+
+      cleaner.onModuleDestroy()
+      await vi.advanceTimersByTimeAsync(STALE_UPLOAD_SWEEP_INTERVAL_MS * 3)
+      expect(prisma.meetingFile.findMany).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
