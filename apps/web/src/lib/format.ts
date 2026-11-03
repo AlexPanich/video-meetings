@@ -25,3 +25,9 @@ const STATUS_LABELS: Record<FileStatus, string> = {
 export const fileStatusLabel = (status: FileStatus) => STATUS_LABELS[status]
 
 export const formatParticipants = (count: number) => `${count} участн.`
+
+export const fileStatusColor: Record<FileStatus, 'success' | 'warning' | 'danger'> = {
+  uploaded: 'success',
+  uploading: 'warning',
+  failed: 'danger',
+}
