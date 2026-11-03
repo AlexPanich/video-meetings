@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument -- тела ответов supertest не типизированы */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument -- тела ответов supertest не типизированы */
 import { INestApplication } from '@nestjs/common'
 import { Test, TestingModule } from '@nestjs/testing'
 import request from 'supertest'
@@ -39,6 +39,17 @@ describe('Swagger (e2e)', () => {
       ]),
     )
     expect(res.body.components.securitySchemes).toHaveProperty('bearer')
+  })
+
+  it('GET /docs-json описывает PATCH /profile и схему его ответа', async () => {
+    const res = await request(app.getHttpServer()).get('/docs-json').expect(200)
+
+    const operation = res.body.paths['/profile']?.patch
+    expect(operation).toBeDefined()
+    expect(operation.responses['200'].content['application/json'].schema.$ref).toBe(
+      '#/components/schemas/PublicUserDto',
+    )
+    expect(res.body.components.schemas).toHaveProperty('PublicUserDto')
   })
 
   it('GET /docs отдаёт Swagger UI', async () => {
