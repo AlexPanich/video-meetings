@@ -78,3 +78,13 @@ export const logout = () => request<void>('/auth/logout', { method: 'POST' })
 
 export const getMeetingFiles = (meetingId: string) =>
   request<MeetingFile[]>(`/meetings/${encodeURIComponent(meetingId)}/files`, { cache: 'no-store' })
+
+const filePath = (meetingId: string, fileId: string) =>
+  `/meetings/${encodeURIComponent(meetingId)}/files/${encodeURIComponent(fileId)}`
+
+// Ссылка для скачивания: cookie уходит вместе с запросом, имя файла берётся из Content-Disposition
+export const fileDownloadUrl = (meetingId: string, fileId: string) =>
+  `/api${filePath(meetingId, fileId)}/download`
+
+export const deleteMeetingFile = (meetingId: string, fileId: string) =>
+  request<void>(filePath(meetingId, fileId), { method: 'DELETE' })

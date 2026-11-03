@@ -239,7 +239,8 @@ describe('MeetingFiles', () => {
       await userEvent.click(within(dialog).getByRole('button', { name: 'Удалить' }))
 
       expect(await within(dialog).findByRole('alert')).toHaveTextContent('Сбой диска')
-      expect(screen.getByText('Протокол встречи.pdf')).toBeInTheDocument()
+      // файл остался в списке (и назван в диалоге)
+      expect(screen.getAllByText('Протокол встречи.pdf')).toHaveLength(2)
     })
 
     it('если файл уже удалён (404), он просто пропадает из списка', async () => {

@@ -1,9 +1,16 @@
 'use client'
 
-import { Alert, Button, Card, Skeleton } from '@heroui/react'
+import { ArrowDownToLine, TrashBin } from '@gravity-ui/icons'
+import { AlertDialog, Alert, Button, buttonVariants, Card, Skeleton } from '@heroui/react'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useState } from 'react'
-import { ApiError, getMeetingFiles, type MeetingFile } from '@/lib/api'
+import {
+  ApiError,
+  deleteMeetingFile,
+  fileDownloadUrl,
+  getMeetingFiles,
+  type MeetingFile,
+} from '@/lib/api'
 import { fileStatusColor, fileStatusLabel, formatFileSize } from '@/lib/format'
 import { FileRow } from './file-row'
 import { FileUploader } from './file-uploader'
@@ -57,6 +64,51 @@ export function MeetingFiles({ meetingId }: { meetingId: string }) {
       ),
     [meetingId],
   )
+
+  // удаление: файл, ждущий подтверждения, и состояние запроса
+  const [toDelete, setToDelete] = useState<MeetingFile | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  const closeDialog = () => {
+    setToDelete(null)
+    setDeleteError(null)
+  }
+
+  const confirmDelete = async () => {
+    if (!toDelete) return
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      await deleteMeetingFile(meetingId, toDelete.id)
+    } catch (error) {
+      // файла уже нет (удалён в другой вкладке) — цель достигнута
+      if (!(error instanceof ApiError && error.status === 404)) {
+        setDeleting(false)
+        if (error instanceof ApiError && error.status === 401) {
+          router.replace('/login')
+          return
+        }
+        setDeleteError(error instanceof ApiError ? error.message : 'Что-то пошло не так')
+        return
+      }
+    }
+    const removedId = toDelete.id
+    setLoaded((current) =>
+      current.meetingId === meetingId && current.state.kind === 'ready'
+        ? {
+            meetingId,
+            state: {
+              kind: 'ready',
+              files: current.state.files.filter((file) => file.id !== removedId),
+            },
+          }
+        : current,
+    )
+    setDeleting(false)
+    closeDialog()
+  }
+
   const goToLogin = useCallback(() => router.replace('/login'), [router])
 
   return (
@@ -102,6 +154,34 @@ export function MeetingFiles({ meetingId }: { meetingId: string }) {
                   name={file.name}
                   status={fileStatusLabel(file.status)}
                   color={fileStatusColor[file.status]}
+                  actions={
+                    <>
+                      {file.status === 'uploaded' && (
+                        // обычная ссылка: браузер сам стримит файл на диск и берёт имя из заголовка
+                        <a
+                          href={fileDownloadUrl(meetingId, file.id)}
+                          download
+                          aria-label={`Скачать ${file.name}`}
+                          className={buttonVariants({
+                            size: 'sm',
+                            variant: 'ghost',
+                            isIconOnly: true,
+                          })}
+                        >
+                          <ArrowDownToLine className="size-4" />
+                        </a>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        isIconOnly
+                        aria-label={`Удалить ${file.name}`}
+                        onPress={() => setToDelete(file)}
+                      >
+                        <TrashBin className="size-4" />
+                      </Button>
+                    </>
+                  }
                 >
                   <p className="text-sm text-muted">
                     <span>{formatFileSize(file.size)}</span>
@@ -113,6 +193,44 @@ export function MeetingFiles({ meetingId }: { meetingId: string }) {
             </ul>
           ))}
       </Card.Content>
+
+      <AlertDialog.Backdrop
+        isOpen={toDelete !== null}
+        // во время запроса диалог не закрывается
+        onOpenChange={(open) => !open && !deleting && closeDialog()}
+      >
+        <AlertDialog.Container>
+          <AlertDialog.Dialog className="sm:max-w-[420px]">
+            <AlertDialog.Header>
+              <AlertDialog.Icon status="danger" />
+              <AlertDialog.Heading>Удалить файл?</AlertDialog.Heading>
+            </AlertDialog.Header>
+            <AlertDialog.Body>
+              <p>
+                Файл <strong className="break-all">{toDelete?.name}</strong> будет удалён
+                безвозвратно.
+              </p>
+              {deleteError && (
+                <Alert className="mt-3" status="danger" role="alert">
+                  <Alert.Indicator />
+                  <Alert.Content>
+                    <Alert.Title>Не удалось удалить файл</Alert.Title>
+                    <Alert.Description>{deleteError}</Alert.Description>
+                  </Alert.Content>
+                </Alert>
+              )}
+            </AlertDialog.Body>
+            <AlertDialog.Footer>
+              <Button variant="tertiary" isDisabled={deleting} onPress={closeDialog}>
+                Отмена
+              </Button>
+              <Button variant="danger" isPending={deleting} onPress={confirmDelete}>
+                Удалить
+              </Button>
+            </AlertDialog.Footer>
+          </AlertDialog.Dialog>
+        </AlertDialog.Container>
+      </AlertDialog.Backdrop>
     </Card>
   )
 }
