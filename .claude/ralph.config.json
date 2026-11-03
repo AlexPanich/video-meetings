@@ -1,8 +1,8 @@
 {
-	"active": false,
-	"milestone": "Фаза 1: Tracer Bullet — изменение имени (API)",
-	"maxIterations": 1,
-	"maxTurns": 50,
-	"branch": "feature/profile-phase-1",
-	"prompt": "Прочитай .claude/ralph.md и следуй правилам оттуда. Возьми следующую открытую Issue из milestone '{milestone}' и реализуй его в '{branch}'"
+  "active": false,
+  "milestone": "Фаза 2: Страницы профиля и редактирование имени (UI)",
+  "maxIterations": 10,
+  "maxTurns": 50,
+  "branch": "feature/profile-phase-2",
+  "prompt": "Прочитай .claude/ralph.md и следуй правилам оттуда. Возьми следующую открытую Issue из milestone '{milestone}' и реализуй его в '{branch}'"
 }
