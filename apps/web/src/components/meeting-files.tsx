@@ -3,9 +3,10 @@
 import { File } from '@gravity-ui/icons'
 import { Alert, Button, Card, Chip, Skeleton } from '@heroui/react'
 import { useRouter } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { ApiError, type FileStatus, getMeetingFiles, type MeetingFile } from '@/lib/api'
 import { fileStatusLabel, formatFileSize } from '@/lib/format'
+import { FileUploader } from './file-uploader'
 import { LocalDateTime } from './local-date-time'
 
 const STATUS_COLOR: Record<FileStatus, 'success' | 'warning' | 'danger'> = {
@@ -53,12 +54,23 @@ export function MeetingFiles({ meetingId }: { meetingId: string }) {
     setAttempt((n) => n + 1)
   }
 
+  // после загрузки список перечитывается без показа скелетона
+  const reload = useCallback(() => setAttempt((n) => n + 1), [])
+  const goToLogin = useCallback(() => router.replace('/login'), [router])
+
   return (
     <Card>
       <Card.Header>
         <Card.Title>Файлы</Card.Title>
       </Card.Header>
-      <Card.Content>
+      <Card.Content className="flex flex-col gap-4">
+        <FileUploader
+          key={meetingId}
+          meetingId={meetingId}
+          onUploaded={reload}
+          onUnauthorized={goToLogin}
+        />
+
         {state.kind === 'loading' && (
           <div role="status" aria-label="Загрузка файлов" className="flex flex-col gap-3">
             <Skeleton className="h-10 w-full rounded-xl" />
