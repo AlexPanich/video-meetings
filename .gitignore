@@ -38,3 +38,6 @@ apps/api/src/generated
 # uploads
 /apps/api/uploads
 /apps/api/uploads-e2e
+
+# Claude Code tooling
+.claude/ralph.iterations.json
