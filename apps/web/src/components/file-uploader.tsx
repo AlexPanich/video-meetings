@@ -1,7 +1,7 @@
 'use client'
 
 import { ArrowUpFromLine, File } from '@gravity-ui/icons'
-import { Alert, Button, Chip, ProgressBar } from '@heroui/react'
+import { Alert, Button, buttonVariants, Chip, ProgressBar } from '@heroui/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError } from '@/lib/api'
 import { fileStatusLabel, formatFileSize } from '@/lib/format'
@@ -120,14 +120,21 @@ export function FileUploader({ meetingId, onUploaded, onUnauthorized }: FileUplo
         <ArrowUpFromLine className="size-6 text-muted" />
         <p className="text-muted">Перетащите файлы сюда или выберите на устройстве</p>
         <p className="text-sm text-muted">До {formatFileSize(MAX_UPLOAD_BYTES)} на файл</p>
-        <Button size="sm" onPress={() => inputRef.current?.click()}>
+        {/* не <Button>: react-aria читает Date.now() при рендере, а Next 16 (cacheComponents)
+            запрещает это в предрендере; здесь нужен только вид кнопки */}
+        <button
+          type="button"
+          className={buttonVariants({ size: 'sm' })}
+          onClick={() => inputRef.current?.click()}
+        >
           Выбрать файлы
-        </Button>
+        </button>
         <input
           ref={inputRef}
           type="file"
           multiple
           aria-label="Выбрать файлы"
+          aria-hidden="true"
           tabIndex={-1}
           className="sr-only"
           onChange={(event) => {
