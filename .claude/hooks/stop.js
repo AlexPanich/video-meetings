@@ -3,6 +3,10 @@ const fs = require('fs')
 
 const config = JSON.parse(fs.readFileSync('.claude/ralph.config.json', 'utf8'))
 
+if (!config.active) {
+  process.exit(0)
+}
+
 // Счётчик итераций
 const counterFile = '.claude/ralph.iterations.json'
 let counter = { count: 0 }
@@ -33,7 +37,9 @@ if (issues.length > 0) {
     `🔄 Итерация ${counter.count}/${config.maxIterations} — Issue #${next.number}: ${next.title}`,
   )
 
-  const prompt = config.prompt.replace('{milestone}', config.milestone)
+  const prompt = config.prompt
+    .replace('{milestone}', config.milestone)
+    .replace('{branch}', config.branch)
   execSync(`claude -p "${prompt}" --max-turns ${config.maxTurns}`, { stdio: 'inherit' })
 } else {
   // Milestone закрыт — сбрасываем счётчик и создаём PR
