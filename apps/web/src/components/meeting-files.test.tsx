@@ -1,9 +1,15 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { uploadFile } from '@/lib/upload'
 import { MeetingFiles } from './meeting-files'
 
 const router = { replace: vi.fn() }
 vi.mock('next/navigation', () => ({ useRouter: () => router }))
+
+vi.mock('@/lib/upload', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/upload')>()),
+  uploadFile: vi.fn(() => Promise.resolve()),
+}))
 
 const fetchMock = vi.fn()
 
@@ -126,5 +132,22 @@ describe('MeetingFiles', () => {
 
     expect(screen.queryByText('первая.pdf')).not.toBeInTheDocument()
     expect(screen.getByRole('status', { name: 'Загрузка файлов' })).toBeInTheDocument()
+  })
+
+  it('блок «Файлы» содержит зону загрузки, а после загрузки обновляет список', async () => {
+    fetchMock.mockImplementationOnce(respond([]))
+    render(<MeetingFiles meetingId="m1" />)
+    await screen.findByText('Файлов пока нет')
+
+    fetchMock.mockImplementationOnce(respond([file({ name: 'новый.pdf' })]))
+    await userEvent.upload(
+      screen.getByLabelText('Выбрать файлы'),
+      new File(['x'], 'новый.pdf', { type: 'application/pdf' }),
+    )
+
+    expect(uploadFile).toHaveBeenCalledWith('m1', expect.any(File), expect.anything())
+    const items = await screen.findAllByRole('listitem')
+    expect(within(items[items.length - 1]).getByText('новый.pdf')).toBeInTheDocument()
+    expect(screen.queryByText('Файлов пока нет')).not.toBeInTheDocument()
   })
 })
