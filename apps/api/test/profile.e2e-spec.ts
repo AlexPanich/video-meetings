@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call -- тела ответов supertest не типизированы */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access -- тела ответов supertest не типизированы */
 import { randomUUID } from 'node:crypto'
 import { Test, TestingModule } from '@nestjs/testing'
 import { INestApplication } from '@nestjs/common'
@@ -75,6 +75,49 @@ describe('Profile (e2e)', () => {
 
       const res = await me(token).expect(200)
       expect(res.body.name).toBe('Alice')
+    })
+
+    it.each([
+      ['нулевой байт', 'a\u0000b'],
+      ['управляющий символ', 'a\u0007b'],
+      ['перевод строки внутри', 'a\nb'],
+      ['zero-width space', '​'],
+      ['только невидимые символы', '​‍⁠'],
+      ['только знаки препинания', '...'],
+    ])('отклоняет имя: %s — кодом 400, прежнее имя остаётся', async (_title, name) => {
+      const { token } = await registerUser()
+
+      await patch(token, { name }).expect(400)
+
+      const res = await me(token).expect(200)
+      expect(res.body.name).toBe('Alice')
+    })
+
+    it.each([['Иван Петров'], ['Mary-Jane O’Neil'], ['李小龍'], ['Алекс 2'], ['👩‍💻 Ann']])(
+      'принимает имя %j',
+      async (name) => {
+        const { token } = await registerUser()
+
+        const res = await patch(token, { name }).expect(200)
+
+        expect(res.body.name).toBe(name)
+      },
+    )
+
+    it('принимает имя длиной 100 символов и отклоняет 101', async () => {
+      const { token } = await registerUser()
+
+      await patch(token, { name: 'я'.repeat(100) }).expect(200)
+      await patch(token, { name: 'я'.repeat(101) }).expect(400)
+
+      const res = await me(token).expect(200)
+      expect(res.body.name).toBe('я'.repeat(100))
+    })
+
+    it('считает длину имени после обрезки пробелов', async () => {
+      const { token } = await registerUser()
+
+      await patch(token, { name: ` ${'я'.repeat(100)} ` }).expect(200)
     })
 
     it('отклоняет запрос без имени и с именем не строкой кодом 400', async () => {

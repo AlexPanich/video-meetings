@@ -1,4 +1,5 @@
 import { UnauthorizedException } from '@nestjs/common'
+import { UpdateUserNameCommand } from '../../users/commands/update-user-name.command.js'
 import { UpdateProfileCommand } from './update-profile.command.js'
 import { UpdateProfileHandler } from './update-profile.handler.js'
 
@@ -6,27 +7,27 @@ const user = { id: 'u1', email: 'alice@example.com', name: 'Alice', passwordHash
 const command = new UpdateProfileCommand(user.id, user.name)
 
 describe('UpdateProfileHandler', () => {
-  const prisma = { user: { update: vi.fn() } }
+  const commandBus = { execute: vi.fn() }
   let handler: UpdateProfileHandler
 
   beforeEach(() => {
     vi.resetAllMocks()
-    handler = new UpdateProfileHandler(prisma as never)
+    handler = new UpdateProfileHandler(commandBus as never)
   })
 
-  it('обновляет имя только у пользователя из команды', async () => {
-    prisma.user.update.mockResolvedValue(user)
+  it('меняет имя через команду модуля users только у пользователя из команды', async () => {
+    commandBus.execute.mockResolvedValue(user)
 
     await handler.execute(command)
 
-    expect(prisma.user.update).toHaveBeenCalledWith({
-      where: { id: user.id },
-      data: { name: user.name },
-    })
+    expect(commandBus.execute).toHaveBeenCalledTimes(1)
+    const [sent] = commandBus.execute.mock.calls[0] as [unknown]
+    expect(sent).toBeInstanceOf(UpdateUserNameCommand)
+    expect(sent).toMatchObject({ userId: user.id, name: user.name })
   })
 
   it('возвращает PublicUser без passwordHash', async () => {
-    prisma.user.update.mockResolvedValue(user)
+    commandBus.execute.mockResolvedValue(user)
 
     const result = await handler.execute(command)
 
@@ -34,15 +35,15 @@ describe('UpdateProfileHandler', () => {
     expect(result).not.toHaveProperty('passwordHash')
   })
 
-  it('бросает UnauthorizedException, если пользователя нет (P2025)', async () => {
-    prisma.user.update.mockRejectedValue({ code: 'P2025' })
+  it('бросает UnauthorizedException, если пользователя нет', async () => {
+    commandBus.execute.mockResolvedValue(null)
 
     await expect(handler.execute(command)).rejects.toBeInstanceOf(UnauthorizedException)
   })
 
-  it('пробрасывает прочие ошибки как есть', async () => {
+  it('пробрасывает ошибки шины как есть', async () => {
     const error = new Error('db down')
-    prisma.user.update.mockRejectedValue(error)
+    commandBus.execute.mockRejectedValue(error)
 
     await expect(handler.execute(command)).rejects.toBe(error)
   })
