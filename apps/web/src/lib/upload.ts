@@ -1,4 +1,4 @@
-import { ApiError, extractErrorMessage } from './api'
+import { ApiError, extractErrorMessage, meetingFilesPath } from './api'
 
 // Лимит одного файла — как MAX_UPLOAD_BYTES в API (по умолчанию 500 МиБ)
 export const MAX_UPLOAD_BYTES = 500 * 1024 * 1024
@@ -36,7 +36,7 @@ export function uploadFile(
     const onAbort = () => xhr.abort()
     const cleanup = () => signal?.removeEventListener('abort', onAbort)
 
-    xhr.open('POST', `/api/meetings/${encodeURIComponent(meetingId)}/files`)
+    xhr.open('POST', `/api${meetingFilesPath(meetingId)}`)
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) onProgress?.(event.loaded, event.total)
     }

@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { uploadFile } from '@/lib/upload'
 import { MeetingFiles } from './meeting-files'
@@ -161,7 +161,18 @@ describe('MeetingFiles', () => {
       expect(link).toHaveAttribute('download')
     })
 
-    it('идентификаторы в ссылке экранируются', async () => {
+    it('для файлов не в статусе «Загружен» нет ни скачивания, ни удаления', async () => {
+      fetchMock.mockImplementation(
+        respond([file({ status: 'uploading' }), file({ id: 'f2', status: 'failed' })]),
+      )
+      render(<MeetingFiles meetingId="m1" />)
+
+      await screen.findAllByRole('listitem')
+      expect(screen.queryByRole('link', { name: /Скачать/ })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Удалить/ })).not.toBeInTheDocument()
+    })
+
+    it('ссылка экранирует идентификаторы на стороне клиента', async () => {
       fetchMock.mockImplementation(respond([file({ id: 'a/b' })]))
       render(<MeetingFiles meetingId="m 1" />)
 
@@ -263,6 +274,60 @@ describe('MeetingFiles', () => {
       await userEvent.click(within(dialog).getByRole('button', { name: 'Удалить' }))
 
       await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/login'))
+    })
+
+    it('пока идёт удаление, «Отмена» недоступна и диалог открыт', async () => {
+      fetchMock.mockImplementationOnce(respond([file()]))
+      render(<MeetingFiles meetingId="m1" />)
+
+      const dialog = await openDialog()
+      fetchMock.mockImplementationOnce(() => new Promise(() => undefined))
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Удалить' }))
+
+      expect(within(dialog).getByRole('button', { name: 'Отмена' })).toBeDisabled()
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    })
+
+    it('при обрыве сети показывает сообщение в диалоге', async () => {
+      fetchMock.mockImplementationOnce(respond([file()]))
+      render(<MeetingFiles meetingId="m1" />)
+
+      const dialog = await openDialog()
+      fetchMock.mockImplementationOnce(() => Promise.reject(new TypeError('fail')))
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Удалить' }))
+
+      expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+        'Не удалось связаться с сервером',
+      )
+    })
+
+    it('запоздавший ответ списка не возвращает уже удалённый файл', async () => {
+      fetchMock.mockImplementationOnce(respond([file(), file({ id: 'f2', name: 'запись.mp4' })]))
+      render(<MeetingFiles meetingId="m1" />)
+      await screen.findByText('запись.mp4')
+
+      // загрузка нового файла: перечитывание списка стартует, но отвечает позже удаления
+      let answerList!: () => void
+      fetchMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answerList = () =>
+              resolve(jsonResponse([file(), file({ id: 'f2', name: 'запись.mp4' })]))
+          }),
+      )
+      await userEvent.upload(screen.getByLabelText('Выбрать файлы'), new File(['x'], 'новый.pdf'))
+
+      const dialog = await openDialog()
+      fetchMock.mockImplementationOnce(noContent)
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Удалить' }))
+      await waitFor(() =>
+        expect(screen.queryByText('Протокол встречи.pdf')).not.toBeInTheDocument(),
+      )
+
+      await act(async () => answerList())
+
+      expect(screen.queryByText('Протокол встречи.pdf')).not.toBeInTheDocument()
+      expect(screen.getByText('запись.mp4')).toBeInTheDocument()
     })
   })
 })

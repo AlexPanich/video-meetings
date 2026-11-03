@@ -14,11 +14,12 @@ interface FileRowProps {
 
 export function FileRow({ name, children, status, color, actions }: FileRowProps) {
   return (
-    <li className="flex items-center gap-3">
+    // на узком экране статус и кнопки переносятся под имя, а не сжимают его
+    <li className="flex flex-wrap items-center gap-x-3 gap-y-2">
       <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">
         <FileIcon className="size-5" />
       </span>
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 basis-40">
         <p className="truncate font-medium">{name}</p>
         {children}
       </div>
