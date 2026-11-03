@@ -1,4 +1,4 @@
-import { ApiError } from './api'
+import { ApiError, extractErrorMessage } from './api'
 
 // Лимит одного файла — как MAX_UPLOAD_BYTES в API (по умолчанию 500 МиБ)
 export const MAX_UPLOAD_BYTES = 500 * 1024 * 1024
@@ -12,13 +12,10 @@ const abortError = () => new DOMException('Загрузка прервана', '
 
 const errorMessage = (responseText: string) => {
   try {
-    const body = JSON.parse(responseText)
-    const message = Array.isArray(body?.message) ? body.message[0] : body?.message
-    if (typeof message === 'string' && message) return message
+    return extractErrorMessage(JSON.parse(responseText)) ?? 'Что-то пошло не так'
   } catch {
-    // тело не JSON — берём общее сообщение
+    return 'Что-то пошло не так' // тело не JSON
   }
-  return 'Что-то пошло не так'
 }
 
 // Загрузка одного файла на `/api/meetings/:id/files`. Идёт через XMLHttpRequest, а не fetch:
@@ -58,8 +55,13 @@ export function uploadFile(
     }
     signal?.addEventListener('abort', onAbort, { once: true })
 
-    const body = new FormData()
-    body.append('file', file, file.name)
-    xhr.send(body)
+    try {
+      const body = new FormData()
+      body.append('file', file, file.name)
+      xhr.send(body)
+    } catch {
+      cleanup()
+      reject(new ApiError('Не удалось отправить файл', 0))
+    }
   })
 }

@@ -1,19 +1,13 @@
 'use client'
 
-import { File } from '@gravity-ui/icons'
-import { Alert, Button, Card, Chip, Skeleton } from '@heroui/react'
+import { Alert, Button, Card, Skeleton } from '@heroui/react'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useState } from 'react'
-import { ApiError, type FileStatus, getMeetingFiles, type MeetingFile } from '@/lib/api'
-import { fileStatusLabel, formatFileSize } from '@/lib/format'
+import { ApiError, getMeetingFiles, type MeetingFile } from '@/lib/api'
+import { fileStatusColor, fileStatusLabel, formatFileSize } from '@/lib/format'
+import { FileRow } from './file-row'
 import { FileUploader } from './file-uploader'
 import { LocalDateTime } from './local-date-time'
-
-const STATUS_COLOR: Record<FileStatus, 'success' | 'warning' | 'danger'> = {
-  uploaded: 'success',
-  uploading: 'warning',
-  failed: 'danger',
-}
 
 type State = { kind: 'loading' } | { kind: 'error' } | { kind: 'ready'; files: MeetingFile[] }
 
@@ -54,8 +48,15 @@ export function MeetingFiles({ meetingId }: { meetingId: string }) {
     setAttempt((n) => n + 1)
   }
 
-  // после загрузки список перечитывается без показа скелетона
-  const reload = useCallback(() => setAttempt((n) => n + 1), [])
+  // после загрузки список перечитывается без скелетона; при сбое остаётся прежний список
+  const reload = useCallback(
+    () =>
+      getMeetingFiles(meetingId).then(
+        (files) => setLoaded({ meetingId, state: { kind: 'ready', files } }),
+        () => undefined,
+      ),
+    [meetingId],
+  )
   const goToLogin = useCallback(() => router.replace('/login'), [router])
 
   return (
@@ -96,22 +97,18 @@ export function MeetingFiles({ meetingId }: { meetingId: string }) {
           ) : (
             <ul className="flex flex-col gap-3">
               {state.files.map((file) => (
-                <li key={file.id} className="flex items-center gap-3">
-                  <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">
-                    <File className="size-5" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate font-medium">{file.name}</p>
-                    <p className="text-sm text-muted">
-                      <span>{formatFileSize(file.size)}</span>
-                      {' · '}
-                      <LocalDateTime value={file.createdAt} />
-                    </p>
-                  </div>
-                  <Chip color={STATUS_COLOR[file.status]} size="sm">
-                    {fileStatusLabel(file.status)}
-                  </Chip>
-                </li>
+                <FileRow
+                  key={file.id}
+                  name={file.name}
+                  status={fileStatusLabel(file.status)}
+                  color={fileStatusColor[file.status]}
+                >
+                  <p className="text-sm text-muted">
+                    <span>{formatFileSize(file.size)}</span>
+                    {' · '}
+                    <LocalDateTime value={file.createdAt} />
+                  </p>
+                </FileRow>
               ))}
             </ul>
           ))}

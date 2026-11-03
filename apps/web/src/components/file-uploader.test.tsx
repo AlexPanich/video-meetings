@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, createEvent, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ApiError } from '@/lib/api'
 import { MAX_UPLOAD_BYTES, uploadFile } from '@/lib/upload'
@@ -95,8 +95,9 @@ describe('FileUploader', () => {
     expect(within(row('b.txt')).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '10')
   })
 
-  it('успешная загрузка убирает файл из очереди и вызывает onUploaded', async () => {
-    const onUploaded = vi.fn()
+  it('onUploaded вызывается, когда завершилась вся очередь; до его завершения файлы показаны как «Загружен»', async () => {
+    let finish!: () => void
+    const onUploaded = vi.fn(() => new Promise<void>((resolve) => (finish = resolve)))
     render(<FileUploader meetingId="m1" onUploaded={onUploaded} />)
     await userEvent.upload(screen.getByLabelText('Выбрать файлы'), [
       makeFile('a.txt'),
@@ -104,10 +105,100 @@ describe('FileUploader', () => {
     ])
 
     await act(async () => calls[0].resolve())
+    expect(within(row('a.txt')).getByText('Загружен')).toBeInTheDocument()
+    expect(onUploaded).not.toHaveBeenCalled()
+
+    await act(async () => calls[1].resolve())
+    expect(onUploaded).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('a.txt')).toBeInTheDocument()
+
+    await act(async () => finish())
+    expect(screen.queryByText('a.txt')).not.toBeInTheDocument()
+    expect(screen.queryByText('b.txt')).not.toBeInTheDocument()
+  })
+
+  it('одновременно грузятся не больше трёх файлов, остальные ждут в очереди', async () => {
+    render(<FileUploader meetingId="m1" />)
+    await userEvent.upload(
+      screen.getByLabelText('Выбрать файлы'),
+      ['a', 'b', 'c', 'd'].map((n) => makeFile(`${n}.txt`)),
+    )
+
+    expect(calls.map((c) => c.file.name)).toEqual(['a.txt', 'b.txt', 'c.txt'])
+    expect(within(row('d.txt')).getByText('В очереди')).toBeInTheDocument()
+
+    await act(async () => calls[0].resolve())
+
+    expect(calls.map((c) => c.file.name)).toEqual(['a.txt', 'b.txt', 'c.txt', 'd.txt'])
+    expect(within(row('d.txt')).getByText('Загружается')).toBeInTheDocument()
+  })
+
+  it('«Отменить» прерывает идущую загрузку и убирает строку, ожидающий файл не стартует', async () => {
+    render(<FileUploader meetingId="m1" />)
+    await userEvent.upload(
+      screen.getByLabelText('Выбрать файлы'),
+      ['a', 'b', 'c', 'd'].map((n) => makeFile(`${n}.txt`)),
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: 'Отменить a.txt' }))
+    expect(calls[0].signal?.aborted).toBe(true)
+    expect(screen.queryByText('a.txt')).not.toBeInTheDocument()
+    await act(async () => calls[0].reject(new DOMException('прервано', 'AbortError')))
+    expect(calls.map((c) => c.file.name)).toEqual(['a.txt', 'b.txt', 'c.txt', 'd.txt'])
+
+    await userEvent.click(screen.getByRole('button', { name: 'Отменить d.txt' }))
+    expect(screen.queryByText('d.txt')).not.toBeInTheDocument()
+  })
+
+  it('«Убрать» удаляет упавший файл из очереди', async () => {
+    render(<FileUploader meetingId="m1" />)
+    await userEvent.upload(screen.getByLabelText('Выбрать файлы'), [makeFile('a.txt')])
+    await act(async () => calls[0].reject(new ApiError('Ошибка', 500)))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Убрать a.txt' }))
 
     expect(screen.queryByText('a.txt')).not.toBeInTheDocument()
-    expect(within(row('b.txt')).getByText('Загружается')).toBeInTheDocument()
-    expect(onUploaded).toHaveBeenCalledTimes(1)
+  })
+
+  it('сообщения об отказе накапливаются и закрываются кнопкой', async () => {
+    render(<FileUploader meetingId="m1" />)
+    const input = screen.getByLabelText('Выбрать файлы')
+    await userEvent.upload(input, [hugeFile('big.bin', MAX_UPLOAD_BYTES + 1)])
+    await userEvent.upload(input, [makeFile('ok.txt'), hugeFile('big.bin', MAX_UPLOAD_BYTES + 1)])
+
+    expect(within(screen.getByRole('alert')).getAllByRole('listitem')).toHaveLength(2)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Закрыть' }))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('подсветка зоны не гаснет при переходе курсора на дочерний элемент', () => {
+    render(<FileUploader meetingId="m1" />)
+    const zone = screen.getByTestId('drop-zone')
+    const child = screen.getByText('Перетащите файлы сюда или выберите на устройстве')
+
+    fireEvent.dragEnter(zone)
+    // jsdom не знает DragEvent и теряет relatedTarget в init
+    const leave = (relatedTarget: Node) => {
+      const event = createEvent.dragLeave(zone)
+      Object.defineProperty(event, 'relatedTarget', { value: relatedTarget })
+      fireEvent(zone, event)
+    }
+    leave(child)
+    expect(zone).toHaveClass('border-accent')
+
+    leave(document.body)
+    expect(zone).not.toHaveClass('border-accent')
+  })
+
+  it('файл, брошенный мимо зоны, не открывается браузером', () => {
+    render(<FileUploader meetingId="m1" />)
+    const event = new Event('drop', { cancelable: true })
+    Object.defineProperty(event, 'dataTransfer', { value: { types: ['Files'] } })
+
+    window.dispatchEvent(event)
+
+    expect(event.defaultPrevented).toBe(true)
   })
 
   it('файл больше 500 МБ не отправляется, показывается понятное сообщение', async () => {

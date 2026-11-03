@@ -37,6 +37,13 @@ export class ApiError extends Error {
   }
 }
 
+// Nest отдаёт `message` строкой или массивом строк (ошибки валидации)
+export const extractErrorMessage = (body: unknown): string | undefined => {
+  const message = (body as { message?: unknown } | null)?.message
+  const first = Array.isArray(message) ? message[0] : message
+  return typeof first === 'string' && first ? first : undefined
+}
+
 // Запросы идут через route handlers Next (`/api/*`): JWT живёт в HttpOnly-cookie и добавляется на сервере
 const request = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
   let response: Response
@@ -51,8 +58,7 @@ const request = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
 
   if (!response.ok) {
     const body = await response.json().catch(() => null)
-    const message = Array.isArray(body?.message) ? body.message[0] : body?.message
-    throw new ApiError(message ?? 'Что-то пошло не так', response.status)
+    throw new ApiError(extractErrorMessage(body) ?? 'Что-то пошло не так', response.status)
   }
   return response.status === 204 ? (undefined as T) : response.json()
 }
