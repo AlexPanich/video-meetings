@@ -54,7 +54,11 @@ export function ProfileNameForm({ initialName }: { initialName: string }) {
       >
         <Label>Имя</Label>
         <Input placeholder="Как вас зовут" />
-        <FieldError />
+        {/* место под ошибку занято всегда: иначе при потере фокуса ошибка исчезает, кнопка уезжает
+            вверх из-под курсора и клик по ней не засчитывается */}
+        <div className="min-h-5">
+          <FieldError />
+        </div>
       </TextField>
 
       <Button type="submit" className="w-full" isPending={pending}>
