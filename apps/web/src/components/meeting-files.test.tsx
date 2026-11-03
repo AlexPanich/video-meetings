@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { uploadFile } from '@/lib/upload'
 import { MeetingFiles } from './meeting-files'
@@ -149,5 +149,185 @@ describe('MeetingFiles', () => {
     const items = await screen.findAllByRole('listitem')
     expect(within(items[items.length - 1]).getByText('новый.pdf')).toBeInTheDocument()
     expect(screen.queryByText('Файлов пока нет')).not.toBeInTheDocument()
+  })
+
+  describe('скачивание', () => {
+    it('у каждого файла есть ссылка на скачивание с исходным именем', async () => {
+      fetchMock.mockImplementation(respond([file()]))
+      render(<MeetingFiles meetingId="m1" />)
+
+      const link = await screen.findByRole('link', { name: 'Скачать Протокол встречи.pdf' })
+      expect(link).toHaveAttribute('href', '/api/meetings/m1/files/f1/download')
+      expect(link).toHaveAttribute('download')
+    })
+
+    it('для файлов не в статусе «Загружен» нет ни скачивания, ни удаления', async () => {
+      fetchMock.mockImplementation(
+        respond([file({ status: 'uploading' }), file({ id: 'f2', status: 'failed' })]),
+      )
+      render(<MeetingFiles meetingId="m1" />)
+
+      await screen.findAllByRole('listitem')
+      expect(screen.queryByRole('link', { name: /Скачать/ })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Удалить/ })).not.toBeInTheDocument()
+    })
+
+    it('ссылка экранирует идентификаторы на стороне клиента', async () => {
+      fetchMock.mockImplementation(respond([file({ id: 'a/b' })]))
+      render(<MeetingFiles meetingId="m 1" />)
+
+      const link = await screen.findByRole('link', { name: /Скачать/ })
+      expect(link).toHaveAttribute('href', '/api/meetings/m%201/files/a%2Fb/download')
+    })
+  })
+
+  describe('удаление', () => {
+    const noContent = () => Promise.resolve(new Response(null, { status: 204 }))
+
+    const openDialog = async (name = 'Протокол встречи.pdf') => {
+      await userEvent.click(await screen.findByRole('button', { name: `Удалить ${name}` }))
+      return screen.findByRole('alertdialog')
+    }
+
+    it('просит подтверждение и ничего не удаляет до него', async () => {
+      fetchMock.mockImplementation(respond([file()]))
+      render(<MeetingFiles meetingId="m1" />)
+
+      const dialog = await openDialog()
+
+      expect(within(dialog).getByText(/Протокол встречи\.pdf/)).toBeInTheDocument()
+      expect(fetchMock).toHaveBeenCalledTimes(1) // только загрузка списка
+    })
+
+    it('«Отмена» закрывает диалог, файл остаётся', async () => {
+      fetchMock.mockImplementation(respond([file()]))
+      render(<MeetingFiles meetingId="m1" />)
+
+      const dialog = await openDialog()
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Отмена' }))
+
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(screen.getByText('Протокол встречи.pdf')).toBeInTheDocument()
+    })
+
+    it('подтверждение шлёт DELETE и убирает файл из списка', async () => {
+      fetchMock.mockImplementationOnce(respond([file(), file({ id: 'f2', name: 'запись.mp4' })]))
+      render(<MeetingFiles meetingId="m1" />)
+
+      const dialog = await openDialog()
+      fetchMock.mockImplementationOnce(noContent)
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Удалить' }))
+
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        '/api/meetings/m1/files/f1',
+        expect.objectContaining({ method: 'DELETE' }),
+      )
+      await waitFor(() =>
+        expect(screen.queryByText('Протокол встречи.pdf')).not.toBeInTheDocument(),
+      )
+      expect(screen.getByText('запись.mp4')).toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    })
+
+    it('после удаления последнего файла показывает пустой список', async () => {
+      fetchMock.mockImplementationOnce(respond([file()]))
+      render(<MeetingFiles meetingId="m1" />)
+
+      const dialog = await openDialog()
+      fetchMock.mockImplementationOnce(noContent)
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Удалить' }))
+
+      expect(await screen.findByText('Файлов пока нет')).toBeInTheDocument()
+    })
+
+    it('при ошибке показывает сообщение в диалоге, файл остаётся', async () => {
+      fetchMock.mockImplementationOnce(respond([file()]))
+      render(<MeetingFiles meetingId="m1" />)
+
+      const dialog = await openDialog()
+      fetchMock.mockImplementationOnce(respond({ message: 'Сбой диска' }, 500))
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Удалить' }))
+
+      expect(await within(dialog).findByRole('alert')).toHaveTextContent('Сбой диска')
+      // файл остался в списке (и назван в диалоге)
+      expect(screen.getAllByText('Протокол встречи.pdf')).toHaveLength(2)
+    })
+
+    it('если файл уже удалён (404), он просто пропадает из списка', async () => {
+      fetchMock.mockImplementationOnce(respond([file()]))
+      render(<MeetingFiles meetingId="m1" />)
+
+      const dialog = await openDialog()
+      fetchMock.mockImplementationOnce(respond({ message: 'Not Found' }, 404))
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Удалить' }))
+
+      expect(await screen.findByText('Файлов пока нет')).toBeInTheDocument()
+    })
+
+    it('при 401 уводит на вход', async () => {
+      fetchMock.mockImplementationOnce(respond([file()]))
+      render(<MeetingFiles meetingId="m1" />)
+
+      const dialog = await openDialog()
+      fetchMock.mockImplementationOnce(respond({ message: 'Unauthorized' }, 401))
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Удалить' }))
+
+      await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/login'))
+    })
+
+    it('пока идёт удаление, «Отмена» недоступна и диалог открыт', async () => {
+      fetchMock.mockImplementationOnce(respond([file()]))
+      render(<MeetingFiles meetingId="m1" />)
+
+      const dialog = await openDialog()
+      fetchMock.mockImplementationOnce(() => new Promise(() => undefined))
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Удалить' }))
+
+      expect(within(dialog).getByRole('button', { name: 'Отмена' })).toBeDisabled()
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    })
+
+    it('при обрыве сети показывает сообщение в диалоге', async () => {
+      fetchMock.mockImplementationOnce(respond([file()]))
+      render(<MeetingFiles meetingId="m1" />)
+
+      const dialog = await openDialog()
+      fetchMock.mockImplementationOnce(() => Promise.reject(new TypeError('fail')))
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Удалить' }))
+
+      expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+        'Не удалось связаться с сервером',
+      )
+    })
+
+    it('запоздавший ответ списка не возвращает уже удалённый файл', async () => {
+      fetchMock.mockImplementationOnce(respond([file(), file({ id: 'f2', name: 'запись.mp4' })]))
+      render(<MeetingFiles meetingId="m1" />)
+      await screen.findByText('запись.mp4')
+
+      // загрузка нового файла: перечитывание списка стартует, но отвечает позже удаления
+      let answerList!: () => void
+      fetchMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answerList = () =>
+              resolve(jsonResponse([file(), file({ id: 'f2', name: 'запись.mp4' })]))
+          }),
+      )
+      await userEvent.upload(screen.getByLabelText('Выбрать файлы'), new File(['x'], 'новый.pdf'))
+
+      const dialog = await openDialog()
+      fetchMock.mockImplementationOnce(noContent)
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Удалить' }))
+      await waitFor(() =>
+        expect(screen.queryByText('Протокол встречи.pdf')).not.toBeInTheDocument(),
+      )
+
+      await act(async () => answerList())
+
+      expect(screen.queryByText('Протокол встречи.pdf')).not.toBeInTheDocument()
+      expect(screen.getByText('запись.mp4')).toBeInTheDocument()
+    })
   })
 })

@@ -76,5 +76,19 @@ export const getMe = () => request<User>('/auth/me')
 
 export const logout = () => request<void>('/auth/logout', { method: 'POST' })
 
+// Путь файловых эндпоинтов встречи (без префикса `/api`)
+export const meetingFilesPath = (meetingId: string) =>
+  `/meetings/${encodeURIComponent(meetingId)}/files`
+
 export const getMeetingFiles = (meetingId: string) =>
-  request<MeetingFile[]>(`/meetings/${encodeURIComponent(meetingId)}/files`, { cache: 'no-store' })
+  request<MeetingFile[]>(meetingFilesPath(meetingId), { cache: 'no-store' })
+
+const filePath = (meetingId: string, fileId: string) =>
+  `${meetingFilesPath(meetingId)}/${encodeURIComponent(fileId)}`
+
+// Ссылка для скачивания: cookie уходит вместе с запросом, имя файла берётся из Content-Disposition
+export const fileDownloadUrl = (meetingId: string, fileId: string) =>
+  `/api${filePath(meetingId, fileId)}/download`
+
+export const deleteMeetingFile = (meetingId: string, fileId: string) =>
+  request<void>(filePath(meetingId, fileId), { method: 'DELETE' })
