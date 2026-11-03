@@ -61,7 +61,7 @@ docker compose down           # остановить (-v — удалить да
 
 ## Gotchas
 
-- Web слушает порт 3000, API — 3001 (`process.env.PORT ?? 3001` в `apps/api/src/main.ts`). `pnpm dev` запускает оба; web проксирует `/api/*` на API (`API_URL`) через route handlers; JWT хранится в HttpOnly-cookie на стороне Next; API читает корневой `.env` (`cp .env.example .env`), `JWT_SECRET` обязателен.
+- Web слушает порт 3000, API — 3001 (`process.env.PORT ?? 3001` в `apps/api/src/main.ts`). `pnpm dev` запускает оба; web проксирует `/api/*` на API (`API_URL`) через route handlers (потоково, в том числе загрузка и скачивание файлов до 500 МиБ); JWT хранится в HttpOnly-cookie на стороне Next; API читает корневой `.env` (`cp .env.example .env`), `JWT_SECRET` обязателен.
 - `pnpm-workspace.yaml` whitelists dependency build scripts (`onlyBuiltDependencies`); new packages that need postinstall scripts must be added there.
 
 ## Code style

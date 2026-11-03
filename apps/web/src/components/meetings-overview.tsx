@@ -1,10 +1,11 @@
 import { Calendar, Plus } from '@gravity-ui/icons'
 import { Button, Card } from '@heroui/react'
+import Link from 'next/link'
+import { LocalDateTime } from '@/components/local-date-time'
+import { formatParticipants } from '@/lib/format'
 import { getMeetings } from '@/lib/server/meetings'
 
 const RECENT_COUNT = 3
-
-const dateFormat = new Intl.DateTimeFormat('ru-RU', { dateStyle: 'medium', timeStyle: 'short' })
 
 const pluralize = (n: number) => {
   const mod10 = n % 10
@@ -49,10 +50,14 @@ export async function MeetingsOverview() {
                     <Calendar className="size-5" />
                   </span>
                   <div className="min-w-0">
-                    <p className="truncate font-medium">{meeting.title}</p>
+                    <p className="truncate font-medium">
+                      <Link href={`/meetings/${meeting.id}`} className="hover:underline">
+                        {meeting.title}
+                      </Link>
+                    </p>
                     <p className="text-sm text-muted">
-                      {dateFormat.format(new Date(meeting.date))} · {meeting.participants.length}{' '}
-                      участн.
+                      <LocalDateTime value={meeting.date} /> ·{' '}
+                      {formatParticipants(meeting.participants.length)}
                     </p>
                   </div>
                 </li>

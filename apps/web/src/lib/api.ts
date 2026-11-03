@@ -12,6 +12,18 @@ export interface Meeting {
   ownerId: string
 }
 
+export type FileStatus = 'uploading' | 'uploaded' | 'failed'
+
+export interface MeetingFile {
+  id: string
+  meetingId: string
+  name: string
+  size: number
+  mimeType: string
+  status: FileStatus
+  createdAt: string
+}
+
 export interface AuthResult {
   user: User
 }
@@ -57,3 +69,6 @@ export const register = (name: string, email: string, password: string) =>
 export const getMe = () => request<User>('/auth/me')
 
 export const logout = () => request<void>('/auth/logout', { method: 'POST' })
+
+export const getMeetingFiles = (meetingId: string) =>
+  request<MeetingFile[]>(`/meetings/${encodeURIComponent(meetingId)}/files`, { cache: 'no-store' })
