@@ -74,6 +74,9 @@ export const register = (name: string, email: string, password: string) =>
 
 export const getMe = () => request<User>('/auth/me')
 
+export const updateProfileName = (name: string) =>
+  request<User>('/profile', { method: 'PATCH', body: JSON.stringify({ name }) })
+
 export const logout = () => request<void>('/auth/logout', { method: 'POST' })
 
 // Путь файловых эндпоинтов встречи (без префикса `/api`)

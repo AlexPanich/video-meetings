@@ -19,7 +19,7 @@ export default function Home() {
         Видеовстречи для вашей команды — просто и быстро.
       </p>
       <div className="relative">
-        <Suspense fallback={<Skeleton className="h-10 w-48 rounded-xl" />}>
+        <Suspense fallback={<Skeleton className="h-41 w-48 rounded-xl" />}>
           <UserGreeting />
         </Suspense>
       </div>
