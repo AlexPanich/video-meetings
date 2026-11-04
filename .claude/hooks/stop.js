@@ -9,6 +9,10 @@ if (process.env.RALPH_ACTIVE !== '1') {
   process.exit(0)
 }
 
+// cwd хука наследуется от сессии: если агент сделал `cd apps/web`, относительные пути ломаются.
+// Поэтому всегда работаем из корня репозитория (файл лежит в <root>/.claude/hooks).
+process.chdir(require('path').resolve(__dirname, '..', '..'))
+
 const config = JSON.parse(fs.readFileSync('.claude/ralph.config.json', 'utf8'))
 
 // Счётчик итераций
