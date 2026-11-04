@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { Suspense } from 'react'
 import { ProfileNameForm } from '@/components/profile-name-form'
-import { UserAvatar } from '@/components/user-avatar'
+import { AvatarEditor } from '@/components/avatar-editor'
 import { getCurrentUser } from '@/lib/server/auth'
 
 export const metadata: Metadata = { title: 'Редактирование профиля — Video Meetings' }
@@ -16,8 +16,12 @@ async function EditProfile() {
 
   return (
     <div className="flex flex-col gap-6 rounded-2xl border border-border p-8">
-      <div className="flex items-center gap-4">
-        <UserAvatar name={user.name} className="size-16 text-xl" />
+      <div className="flex flex-col gap-2">
+        <AvatarEditor
+          name={user.name}
+          hasAvatar={Boolean(user.hasAvatar)}
+          avatarVersion={user.avatarVersion ?? null}
+        />
         <p className="text-muted">{user.email}</p>
       </div>
       {/* key: после сохранения или смены пользователя форма создаётся заново, а не хранит старый ввод */}

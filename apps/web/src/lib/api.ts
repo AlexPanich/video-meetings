@@ -2,6 +2,8 @@ export interface User {
   id: string
   email: string
   name: string
+  hasAvatar?: boolean
+  avatarVersion?: number | null
 }
 
 export interface Meeting {
@@ -50,7 +52,8 @@ const request = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
   try {
     response = await fetch(`/api${path}`, {
       ...init,
-      headers: { 'Content-Type': 'application/json' },
+      // JSON-заголовок только у строкового тела: у FormData Content-Type с boundary выставляет браузер
+      headers: typeof init.body === 'string' ? { 'Content-Type': 'application/json' } : undefined,
     })
   } catch {
     throw new ApiError('Не удалось связаться с сервером', 0)
@@ -76,6 +79,14 @@ export const getMe = () => request<User>('/auth/me')
 
 export const updateProfileName = (name: string) =>
   request<User>('/profile', { method: 'PATCH', body: JSON.stringify({ name }) })
+
+export const uploadAvatar = (file: File) => {
+  const body = new FormData()
+  body.append('file', file, file.name)
+  return request<User>('/profile/avatar', { method: 'PUT', body })
+}
+
+export const deleteAvatar = () => request<void>('/profile/avatar', { method: 'DELETE' })
 
 export const logout = () => request<void>('/auth/logout', { method: 'POST' })
 

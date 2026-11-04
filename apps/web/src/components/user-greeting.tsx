@@ -15,7 +15,12 @@ export async function UserGreeting() {
         aria-label="Профиль"
         className="rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       >
-        <UserAvatar name={user.name} className="size-16 text-xl" />
+        <UserAvatar
+          name={user.name}
+          hasAvatar={user.hasAvatar}
+          avatarVersion={user.avatarVersion}
+          className="size-16 text-xl"
+        />
       </Link>
       <p className="text-lg">
         Привет, <span className="font-semibold">{user.name}</span>!
