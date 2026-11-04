@@ -1,7 +1,7 @@
 {
-  "milestone": "Фаза 3: Загрузка, выдача и удаление аватара (API)",
+  "milestone": "Фаза 4: Аватар в интерфейсе (UI)",
   "maxIterations": 10,
   "maxTurns": 50,
-  "branch": "feature/profile-phase-3",
+  "branch": "feature/profile-phase-4",
   "prompt": "Прочитай .claude/ralph.md и следуй правилам оттуда. Возьми следующую открытую Issue из milestone '{milestone}' и реализуй его в '{branch}'"
 }
