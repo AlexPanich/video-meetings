@@ -25,8 +25,10 @@ export class ChangePasswordDto {
   currentPassword: string
 
   @IsString()
-  @MinLength(8)
-  @MaxLength(PASSWORD_MAX_LENGTH)
+  @MinLength(8, { message: 'Пароль должен быть не короче 8 символов' })
+  @MaxLength(PASSWORD_MAX_LENGTH, {
+    message: `Пароль должен быть не длиннее ${PASSWORD_MAX_LENGTH} символов`,
+  })
   newPassword: string
 }
 
