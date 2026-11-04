@@ -6,6 +6,7 @@ import { CreateUserHandler } from './commands/create-user.handler.js'
 import { SetUserAvatarHandler } from './commands/set-user-avatar.handler.js'
 import { UpdateUserNameHandler } from './commands/update-user-name.handler.js'
 import { FindUserByEmailHandler } from './queries/find-user-by-email.handler.js'
+import { GetUserTokenVersionHandler } from './queries/get-user-token-version.handler.js'
 import { FindUserByIdHandler } from './queries/find-user-by-id.handler.js'
 
 @Module({
@@ -18,6 +19,7 @@ import { FindUserByIdHandler } from './queries/find-user-by-id.handler.js'
     ClearUserAvatarHandler,
     FindUserByEmailHandler,
     FindUserByIdHandler,
+    GetUserTokenVersionHandler,
   ],
 })
 export class UsersModule {}

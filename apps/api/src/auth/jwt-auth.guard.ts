@@ -2,7 +2,7 @@ import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from
 import { QueryBus } from '@nestjs/cqrs'
 import { JwtService } from '@nestjs/jwt'
 import type { Request } from 'express'
-import { FindUserByIdQuery } from '../users/queries/find-user-by-id.query.js'
+import { GetUserTokenVersionQuery } from '../users/queries/get-user-token-version.query.js'
 
 export type AuthenticatedRequest = Request & { userId: string }
 
@@ -30,9 +30,9 @@ export class JwtAuthGuard implements CanActivate {
     } catch {
       throw new UnauthorizedException()
     }
-    const user = await this.queryBus.execute(new FindUserByIdQuery(payload.sub))
+    const tokenVersion = await this.queryBus.execute(new GetUserTokenVersionQuery(payload.sub))
     // токен без версии считается версией 0: действующие сессии не обрываются при выкатке
-    if (!user || user.tokenVersion !== (payload.ver ?? 0)) {
+    if (tokenVersion === null || tokenVersion !== (payload.ver ?? 0)) {
       throw new UnauthorizedException()
     }
     request.userId = payload.sub
