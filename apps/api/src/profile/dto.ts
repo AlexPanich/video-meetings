@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer'
-import { IsNotEmpty, IsString, Matches, MaxLength } from 'class-validator'
+import { IsNotEmpty, IsString, Matches, MaxLength, MinLength } from 'class-validator'
 
 // Максимальная длина имени пользователя (после обрезки пробелов)
 export const NAME_MAX_LENGTH = 100
@@ -16,6 +16,18 @@ export class UpdateProfileDto {
   name: string
 }
 
+export class ChangePasswordDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(1024)
+  currentPassword: string
+
+  @IsString()
+  @MinLength(8)
+  @MaxLength(128)
+  newPassword: string
+}
+
 // Схема ответа для Swagger: PublicUser — TS-тип, плагин Nest CLI строит схемы только из классов
 export class PublicUserDto {
   id: string
@@ -23,4 +35,10 @@ export class PublicUserDto {
   name: string
   hasAvatar: boolean
   avatarVersion: number | null
+}
+
+// Схема ответа смены пароля для Swagger (как у входа)
+export class AuthResultDto {
+  accessToken: string
+  user: PublicUserDto
 }

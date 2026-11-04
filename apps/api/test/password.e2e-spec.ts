@@ -33,7 +33,8 @@ describe('Password (e2e)', () => {
     const res = await http()
       .post('/meetings')
       .set('Authorization', `Bearer ${token}`)
-      .send({ title: 'Sync' })
+      .send({ title: 'Sync', date: '2030-01-15T10:00:00.000Z', participants: [] })
+      .expect(201)
     return res.body.id as string
   }
 
