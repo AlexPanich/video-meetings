@@ -1,6 +1,8 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access -- тела ответов supertest не типизированы */
 import { randomUUID } from 'node:crypto'
 import { readdir } from 'node:fs/promises'
+import type { Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { Test, TestingModule } from '@nestjs/testing'
 import { INestApplication } from '@nestjs/common'
@@ -126,6 +128,17 @@ describe('Avatar (e2e)', () => {
       expect(Buffer.compare(got.body as Buffer, JPG)).toBe(0)
     })
 
+    it('принимает файл ровно 5 МБ', async () => {
+      const auth = await registerUser()
+
+      const exact = Buffer.concat([PNG, filler(MAX_AVATAR_BYTES - PNG.length)])
+      expect(exact.length).toBe(MAX_AVATAR_BYTES)
+      await put(auth, exact).expect(200)
+
+      const got = await get(auth).expect(200)
+      expect((got.body as Buffer).length).toBe(MAX_AVATAR_BYTES)
+    })
+
     it('413 для файла больше 5 МБ, текущий аватар не меняется', async () => {
       const auth = await registerUser()
       await put(auth, PNG).expect(200)
@@ -149,14 +162,70 @@ describe('Avatar (e2e)', () => {
       await put(auth, PNG).expect(200)
       const before = await listAvatars()
 
-      const res = await put(auth, content, name, mime)
-      expect([400, 415]).toContain(res.status)
+      await put(auth, content, name, mime).expect(415)
 
       expect(await listAvatars()).toEqual(before)
       const got = await get(auth).expect(200)
       expect(got.headers['content-type']).toContain('image/png')
       expect(Buffer.compare(got.body as Buffer, PNG)).toBe(0)
     })
+
+    // отказ по формату возникает на первых байтах; если сразу закрыть сокет, пока клиент ещё
+    // шлёт тело, часть клиентов получит обрыв (EPIPE/ECONNRESET) вместо ответа 415
+    it('отвечает 415, а не обрывает соединение, на большом файле неверного формата', async () => {
+      const auth = await registerUser()
+      await app.listen(0)
+      const { port } = (app.getHttpServer() as Server).address() as AddressInfo
+
+      const boundary = 'raw-boundary'
+      const head = Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="a.png"\r\n` +
+          'Content-Type: image/png\r\n\r\n%PDF-1.4\n',
+      )
+      const tail = Buffer.from(`\r\n--${boundary}--\r\n`)
+      const payload = filler(4 * 1024 * 1024)
+      const length = head.length + payload.length + tail.length
+      const chunk = 64 * 1024
+
+      // так прокси Next передаёт тело в API: fetch с потоковым телом (duplex: 'half')
+      const send = async (): Promise<string> => {
+        const body = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            controller.enqueue(head)
+            for (let at = 0; at < payload.length; at += chunk) {
+              controller.enqueue(payload.subarray(at, at + chunk))
+              // медленный клиент: к моменту отказа тело ещё не отправлено до конца
+              await new Promise((resolve) => setTimeout(resolve, 3))
+            }
+            controller.enqueue(tail)
+            controller.close()
+          },
+        })
+        try {
+          const init: RequestInit & { duplex: 'half' } = {
+            method: 'PUT',
+            headers: {
+              Authorization: auth,
+              'Content-Type': `multipart/form-data; boundary=${boundary}`,
+              'Content-Length': String(length),
+            },
+            body,
+            duplex: 'half',
+          }
+          const res = await fetch(`http://127.0.0.1:${port}/profile/avatar`, init)
+          await res.arrayBuffer()
+          return String(res.status)
+        } catch (error) {
+          const cause = (error as { cause?: { code?: string } }).cause
+          return cause?.code ?? 'FETCH_ERROR'
+        }
+      }
+
+      const outcomes: string[] = []
+      for (let i = 0; i < 10; i++) outcomes.push(await send())
+
+      expect(outcomes).toEqual(Array(10).fill('415'))
+    }, 60_000)
 
     it('MIME-тип берётся по сигнатуре, а не из заголовка клиента', async () => {
       const auth = await registerUser()
