@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common'
 import { JwtService } from '@nestjs/jwt'
-import { type PublicUser, toPublicUser } from '../users/user.js'
+import { type PublicUser, toPublicUser, type UserLike } from '../users/user.js'
 
 export interface AuthResult {
   accessToken: string
@@ -11,7 +11,7 @@ export interface AuthResult {
 export class TokenService {
   constructor(private readonly jwt: JwtService) {}
 
-  async issue(user: PublicUser): Promise<AuthResult> {
+  async issue(user: UserLike): Promise<AuthResult> {
     return {
       accessToken: await this.jwt.signAsync({ sub: user.id }),
       user: toPublicUser(user),

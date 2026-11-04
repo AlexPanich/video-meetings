@@ -6,7 +6,7 @@ export type PublicUser = Pick<User, 'id' | 'email' | 'name'> & {
   avatarVersion: number | null
 }
 
-type UserLike = Pick<User, 'id' | 'email' | 'name'> &
+export type UserLike = Pick<User, 'id' | 'email' | 'name'> &
   Partial<Pick<User, 'avatarStorageName' | 'avatarUpdatedAt'>>
 
 export const toPublicUser = ({
