@@ -41,3 +41,4 @@ apps/api/src/generated
 
 # Claude Code tooling
 .claude/ralph.iterations.json
+.claude/ralph.log

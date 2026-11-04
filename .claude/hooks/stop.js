@@ -13,6 +13,19 @@ if (process.env.RALPH_ACTIVE !== '1') {
 // Поэтому всегда работаем из корня репозитория (файл лежит в <root>/.claude/hooks).
 process.chdir(require('path').resolve(__dirname, '..', '..'))
 
+// Вывод Stop-хука Claude Code перехватывает и в терминал не показывает, поэтому всё пишем
+// ещё и в .claude/ralph.log (следить: tail -f .claude/ralph.log).
+const logFile = '.claude/ralph.log'
+const log = (msg) => {
+  fs.appendFileSync(logFile, `${new Date().toISOString()} ${msg}\n`)
+  console.log(msg)
+}
+// Вывод вложенной сессии claude -p уходит в тот же файл
+const nestedStdio = () => {
+  const fd = fs.openSync(logFile, 'a')
+  return ['inherit', fd, fd]
+}
+
 const config = JSON.parse(fs.readFileSync('.claude/ralph.config.json', 'utf8'))
 
 // Счётчик итераций
@@ -24,7 +37,7 @@ if (fs.existsSync(counterFile)) {
 
 // Проверяем лимит
 if (counter.count >= config.maxIterations) {
-  console.log(`⛔ Достигнут лимит итераций (${config.maxIterations}). Ralph останавливается.`)
+  log(`⛔ Достигнут лимит итераций (${config.maxIterations}). Ralph останавливается.`)
   fs.writeFileSync(counterFile, JSON.stringify({ count: 0 }))
   process.exit(0)
 }
@@ -41,17 +54,17 @@ if (issues.length > 0) {
   fs.writeFileSync(counterFile, JSON.stringify(counter))
 
   const next = issues[0]
-  console.log(
+  log(
     `🔄 Итерация ${counter.count}/${config.maxIterations} — Issue #${next.number}: ${next.title}`,
   )
 
   const prompt = config.prompt
     .replace('{milestone}', config.milestone)
     .replace('{branch}', config.branch)
-  execSync(`claude -p "${prompt}" --max-turns ${config.maxTurns}`, { stdio: 'inherit' })
+  execSync(`claude -p "${prompt}" --max-turns ${config.maxTurns}`, { stdio: nestedStdio() })
 } else {
   // Milestone закрыт — сбрасываем счётчик и создаём PR
-  console.log(`✅ Milestone завершён. Создаём PR.`)
+  log(`✅ Milestone завершён. Создаём PR.`)
   fs.writeFileSync(counterFile, JSON.stringify({ count: 0 }))
   // Описание PR: закрытые Issues milestone (Closes #N) и список коммитов ветки
   const closed = JSON.parse(
@@ -82,8 +95,9 @@ if (issues.length > 0) {
     .toString()
     .trim()
   fs.rmSync(bodyFile, { force: true })
+  log(`PR создан: ${prUrl}`)
 
-  console.log('🔍 Запускаем финальное ревью через Opus...')
+  log('🔍 Запускаем финальное ревью через Opus...')
   const reviewPrompt =
     `Сделай детальное code review PR ${prUrl}. Проверь архитектуру, безопасность, производительность и соответствие PRD. ` +
     `Опубликуй результат в PR одним отзывом с inline-комментариями: ` +
@@ -91,8 +105,8 @@ if (issues.length > 0) {
     `Если публикация не удалась, выведи причину и сохрани текст ревью в .pr-review.json. ` +
     `После 502 сначала проверь список отзывов, чтобы не создать дубль.`
   try {
-    execSync(`claude -p "${reviewPrompt}" --model claude-opus-5-5`, { stdio: 'inherit' })
+    execSync(`claude -p "${reviewPrompt}" --model claude-opus-5-5`, { stdio: nestedStdio() })
   } catch (e) {
-    console.log(`⚠️ Ревью не выполнено: ${e.message}`)
+    log(`⚠️ Ревью не выполнено: ${e.message}`)
   }
 }
