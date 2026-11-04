@@ -1,11 +1,15 @@
 const { execSync } = require('child_process')
 const fs = require('fs')
 
-const config = JSON.parse(fs.readFileSync('.claude/ralph.config.json', 'utf8'))
-
-if (!config.active) {
+// Цикл включается только запуском через .claude/ralph.start.js (он выставляет RALPH_ACTIVE=1,
+// переменная наследуется вложенными сессиями claude -p). В обычных сессиях хук ничего не делает.
+// Флага в ralph.config.json нет: файл отслеживается git, и локальная правка конфликтовала бы
+// с обновлениями из main.
+if (process.env.RALPH_ACTIVE !== '1') {
   process.exit(0)
 }
+
+const config = JSON.parse(fs.readFileSync('.claude/ralph.config.json', 'utf8'))
 
 // Счётчик итераций
 const counterFile = '.claude/ralph.iterations.json'

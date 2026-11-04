@@ -1,5 +1,4 @@
 {
-  "active": false,
   "milestone": "Фаза 3: Загрузка, выдача и удаление аватара (API)",
   "maxIterations": 10,
   "maxTurns": 50,
