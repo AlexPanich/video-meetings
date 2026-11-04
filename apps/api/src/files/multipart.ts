@@ -14,6 +14,42 @@ interface ReceiveOptions<T> {
   onFile: (stream: Readable, info: FileInfo) => Promise<T>
   // вызывается, если файл уже сохранён, но запрос всё равно отклонён (например, второй файл)
   rollback?: (result: T) => Promise<void>
+  // при отказе не закрывать соединение сразу, а дочитать остаток тела (не больше `maxSize`), иначе
+  // клиент, который ещё шлёт файл, получит обрыв (EPIPE/ECONNRESET) вместо ответа с причиной.
+  // Нужно для небольших файлов; для файлов в сотни МБ дочитывание не оправдано
+  drainOnFailure?: boolean
+}
+
+// сколько ждать, пока клиент дошлёт тело после отказа, прежде чем закрыть соединение
+const DRAIN_TIMEOUT_MS = 10_000
+
+// дочитывает остаток тела запроса; при превышении лимита или таймаута закрывает соединение
+function drainBody(request: IncomingMessage, limit: number, onGiveUp: () => void): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (request.complete || request.destroyed) {
+      resolve()
+      return
+    }
+    let received = 0
+    const finish = () => {
+      clearTimeout(timer)
+      request.off('data', onData)
+      resolve()
+    }
+    const giveUp = () => {
+      onGiveUp()
+      finish()
+    }
+    const onData = (chunk: Buffer) => {
+      received += chunk.length
+      if (received > limit) giveUp()
+    }
+    const timer = setTimeout(giveUp, DRAIN_TIMEOUT_MS)
+    request.on('data', onData)
+    request.once('end', finish)
+    request.once('close', finish)
+    request.once('error', finish)
+  })
 }
 
 /**
@@ -23,7 +59,7 @@ interface ReceiveOptions<T> {
  */
 export function receiveSingleFile<T>(
   request: IncomingMessage,
-  { maxSize, onFile, rollback }: ReceiveOptions<T>,
+  { maxSize, onFile, rollback, drainOnFailure }: ReceiveOptions<T>,
 ): Promise<T> {
   return new Promise<T>((resolveOuter, rejectOuter) => {
     // после завершения (успеха или отказа) поздние события запроса уже ни на что не влияют
@@ -78,7 +114,7 @@ export function receiveSingleFile<T>(
     const fail = (error: Error) => {
       if (failed || done) return
       failed = true
-      closeAfterResponse()
+      if (!drainOnFailure) closeAfterResponse()
       request.unpipe(parser)
       request.resume()
       // уже дочитанный поток трогать нельзя: destroy(error) выбросит необработанный 'error'
@@ -92,6 +128,11 @@ export function receiveSingleFile<T>(
           () => undefined,
         )
         .catch(() => undefined)
+        .then(() =>
+          drainOnFailure
+            ? drainBody(request, maxSize + MULTIPART_OVERHEAD, closeAfterResponse)
+            : undefined,
+        )
         .then(() => reject(error))
     }
 
