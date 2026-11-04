@@ -1,4 +1,13 @@
-import { AVATAR_SIGNATURE_BYTES, detectAvatarMimeType } from './avatar.js'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { Logger } from '@nestjs/common'
+import {
+  AVATAR_SIGNATURE_BYTES,
+  detectAvatarMimeType,
+  getAvatarPath,
+  removeAvatarFile,
+} from './avatar.js'
 
 describe('detectAvatarMimeType', () => {
   it('распознаёт JPEG', () => {
@@ -40,5 +49,49 @@ describe('detectAvatarMimeType', () => {
 
   it('для сигнатуры хватает AVATAR_SIGNATURE_BYTES байт', () => {
     expect(AVATAR_SIGNATURE_BYTES).toBe(12)
+  })
+})
+
+describe('removeAvatarFile', () => {
+  let uploadsDir: string
+  const logger = new Logger('test')
+
+  beforeEach(async () => {
+    uploadsDir = await mkdtemp(join(tmpdir(), 'avatar-file-unit-'))
+    process.env.UPLOADS_DIR = uploadsDir
+    await mkdir(join(uploadsDir, 'avatars'))
+  })
+
+  afterEach(async () => {
+    delete process.env.UPLOADS_DIR
+    await rm(uploadsDir, { recursive: true, force: true })
+  })
+
+  it('удаляет файл', async () => {
+    await writeFile(getAvatarPath('a'), 'x')
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined)
+
+    await removeAvatarFile('a', logger)
+
+    await expect(rm(getAvatarPath('a'))).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('отсутствие файла не ошибка и не пишется в лог', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined)
+
+    await removeAvatarFile('missing', logger)
+
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('прочие сбои логируются с именем файла и не бросаются', async () => {
+    // вместо файла каталог: unlink завершится EISDIR/EPERM, а не ENOENT
+    await mkdir(getAvatarPath('dir'))
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined)
+
+    await expect(removeAvatarFile('dir', logger)).resolves.toBeUndefined()
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('dir'))
   })
 })

@@ -8,7 +8,8 @@ import {
   UnauthorizedException,
   UnsupportedMediaTypeException,
 } from '@nestjs/common'
-import type { CommandBus } from '@nestjs/cqrs'
+import type { CommandBus, QueryBus } from '@nestjs/cqrs'
+import type { Mock } from 'vitest'
 import { AVATAR_MAX_BYTES } from '../avatar.js'
 import { UploadAvatarCommand } from './upload-avatar.command.js'
 import { UploadAvatarHandler } from './upload-avatar.handler.js'
@@ -43,6 +44,7 @@ const fakeRequest = (body: Buffer) => {
 describe('UploadAvatarHandler', () => {
   let uploadsDir: string
   let commandBus: { execute: ReturnType<typeof vi.fn> }
+  let queryBus: { execute: Mock<(query: unknown) => Promise<unknown>> }
   let handler: UploadAvatarHandler
 
   const avatarFiles = () => readdir(join(uploadsDir, 'avatars')).catch(() => [] as string[])
@@ -59,7 +61,11 @@ describe('UploadAvatarHandler', () => {
     uploadsDir = await mkdtemp(join(tmpdir(), 'avatar-unit-'))
     process.env.UPLOADS_DIR = uploadsDir
     commandBus = { execute: vi.fn() }
-    handler = new UploadAvatarHandler(commandBus as unknown as CommandBus)
+    queryBus = { execute: vi.fn() }
+    handler = new UploadAvatarHandler(
+      commandBus as unknown as CommandBus,
+      queryBus as unknown as QueryBus,
+    )
   })
 
   afterEach(async () => {
@@ -136,6 +142,48 @@ describe('UploadAvatarHandler', () => {
     await expect(run(PNG)).rejects.toThrow('db down')
 
     expect(await avatarFiles()).toEqual([])
+  })
+
+  describe('сбой команды, когда транзакция могла зафиксироваться', () => {
+    const userWith = (avatarStorageName: string | null) => ({
+      id: 'u1',
+      email: 'a@example.com',
+      name: 'A',
+      passwordHash: 'x',
+      avatarStorageName,
+      avatarUpdatedAt: new Date(1000),
+    })
+
+    it('если в БД уже новый аватар, файл остаётся и запрос успешен', async () => {
+      commandBus.execute.mockRejectedValue(new Error('connection lost on commit'))
+      queryBus.execute.mockImplementation(async () => {
+        const [name] = await avatarFiles()
+        return userWith(name)
+      })
+
+      const result = await run(PNG)
+
+      expect(result).toMatchObject({ id: 'u1', hasAvatar: true })
+      expect(await avatarFiles()).toHaveLength(1)
+    })
+
+    it('если в БД другой аватар, новый файл удаляется и отдаётся исходная ошибка', async () => {
+      commandBus.execute.mockRejectedValue(new Error('db down'))
+      queryBus.execute.mockResolvedValue(userWith('00000000-0000-4000-8000-000000000009'))
+
+      await expect(run(PNG)).rejects.toThrow('db down')
+
+      expect(await avatarFiles()).toEqual([])
+    })
+
+    it('если БД недоступна и перечитать нельзя, файл остаётся для очистки осиротевших', async () => {
+      commandBus.execute.mockRejectedValue(new Error('db down'))
+      queryBus.execute.mockRejectedValue(new Error('db still down'))
+
+      await expect(run(PNG)).rejects.toThrow('db down')
+
+      expect(await avatarFiles()).toHaveLength(1)
+    })
   })
 
   it('401 и удаление файла, если пользователя уже нет', async () => {
