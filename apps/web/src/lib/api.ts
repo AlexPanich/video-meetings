@@ -2,8 +2,8 @@ export interface User {
   id: string
   email: string
   name: string
-  hasAvatar?: boolean
-  avatarVersion?: number | null
+  hasAvatar: boolean
+  avatarVersion: number | null
 }
 
 export interface Meeting {

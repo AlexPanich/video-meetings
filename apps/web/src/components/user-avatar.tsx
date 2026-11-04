@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { avatarUrl } from '@/lib/avatar'
 
 // Инициалы: первая буква или цифра каждого из первых двух слов имени в верхнем регистре.
@@ -30,6 +30,10 @@ export function UserAvatar({
   // версия, для которой изображение не загрузилось: при новой версии пробуем снова
   const [failedSrc, setFailedSrc] = useState<string | null>(null)
   const src = avatarUrl(avatarVersion)
+  // Ошибка загрузки, случившаяся до гидратации, onError не вызывает: проверяем состояние при монтировании
+  const checkLoaded = useCallback((img: HTMLImageElement | null) => {
+    if (img?.complete && img.naturalWidth === 0) setFailedSrc(img.getAttribute('src'))
+  }, [])
   const showImage = hasAvatar && failedSrc !== src
 
   return (
@@ -40,6 +44,7 @@ export function UserAvatar({
       {showImage ? (
         // eslint-disable-next-line @next/next/no-img-element -- закрытый эндпоинт с cookie, оптимизатор не нужен
         <img
+          ref={checkLoaded}
           src={src}
           alt=""
           className="size-full object-cover"

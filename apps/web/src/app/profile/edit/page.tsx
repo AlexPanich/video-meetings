@@ -19,8 +19,8 @@ async function EditProfile() {
       <div className="flex flex-col gap-2">
         <AvatarEditor
           name={user.name}
-          hasAvatar={Boolean(user.hasAvatar)}
-          avatarVersion={user.avatarVersion ?? null}
+          hasAvatar={user.hasAvatar}
+          avatarVersion={user.avatarVersion}
         />
         <p className="text-muted">{user.email}</p>
       </div>

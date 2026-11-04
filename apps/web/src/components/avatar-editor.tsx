@@ -2,7 +2,7 @@
 
 import { AlertDialog, Alert, Button } from '@heroui/react'
 import { useRouter } from 'next/navigation'
-import { type ChangeEvent, useRef, useState } from 'react'
+import { type ChangeEvent, useEffect, useRef, useState, useTransition } from 'react'
 import { ApiError, deleteAvatar, uploadAvatar } from '@/lib/api'
 import { AVATAR_TYPES, validateAvatarFile } from '@/lib/avatar'
 import { UserAvatar } from './user-avatar'
@@ -20,26 +20,48 @@ export function AvatarEditor({
 }) {
   const router = useRouter()
   const inputRef = useRef<HTMLInputElement>(null)
+  const uploadButtonRef = useRef<HTMLButtonElement>(null)
+  const busyRef = useRef(false) // защита от повторной отправки: state из замыкания может быть устаревшим
+  const hadAvatarRef = useRef(hasAvatar)
   const [error, setError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  // router.refresh() не ждёт ответа сервера: держим индикатор до конца перехода
+  const [refreshing, startRefresh] = useTransition()
+
+  // Next 16 скрывает страницу, а не размонтирует её: при уходе сбрасываем ошибку
+  useEffect(() => () => setError(null), [])
+
+  // После удаления кнопка «Удалить» исчезает, и фокус падает на <body>: возвращаем его на «Загрузить фото»
+  useEffect(() => {
+    const removed = hadAvatarRef.current && !hasAvatar
+    hadAvatarRef.current = hasAvatar
+    if (!removed) return
+    const timer = setTimeout(() => {
+      if (!document.activeElement || document.activeElement === document.body) {
+        uploadButtonRef.current?.focus()
+      }
+    }, 300) // после анимации закрытия диалога, которая сама возвращает фокус
+    return () => clearTimeout(timer)
+  }, [hasAvatar])
 
   const onPick = async (event: ChangeEvent<HTMLInputElement>) => {
     const input = event.currentTarget
     const file = input.files?.[0]
     input.value = '' // тот же файл можно выбрать повторно
-    if (!file || uploading) return
+    if (!file || busyRef.current) return
     const reason = validateAvatarFile(file)
     setError(reason)
     if (reason) return
 
+    busyRef.current = true
     setUploading(true)
     try {
       await uploadAvatar(file)
       // Next 16 хранит открытые страницы: без обновления профиль и главная покажут прежний аватар
-      router.refresh()
+      startRefresh(() => router.refresh())
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
         router.replace('/login')
@@ -47,6 +69,7 @@ export function AvatarEditor({
       }
       setError(messageOf(e))
     } finally {
+      busyRef.current = false
       setUploading(false)
     }
   }
@@ -54,10 +77,13 @@ export function AvatarEditor({
   const confirmDelete = async () => {
     setDeleting(true)
     setDeleteError(null)
+    setError(null) // старая ошибка загрузки после удаления уже не актуальна
     try {
       await deleteAvatar()
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
+        setDeleting(false)
+        setDialogOpen(false)
         router.replace('/login')
         return
       }
@@ -70,7 +96,7 @@ export function AvatarEditor({
     }
     setDeleting(false)
     setDialogOpen(false)
-    router.refresh()
+    startRefresh(() => router.refresh())
   }
 
   return (
@@ -84,8 +110,9 @@ export function AvatarEditor({
         />
         <div className="flex flex-wrap gap-2">
           <Button
+            ref={uploadButtonRef}
             variant="secondary"
-            isPending={uploading}
+            isPending={uploading || refreshing}
             onPress={() => inputRef.current?.click()}
           >
             {hasAvatar ? 'Заменить' : 'Загрузить фото'}
@@ -94,7 +121,7 @@ export function AvatarEditor({
             <Button
               variant="tertiary"
               aria-label="Удалить аватар"
-              isDisabled={uploading}
+              isDisabled={uploading || refreshing}
               onPress={() => {
                 setDeleteError(null)
                 setDialogOpen(true)
@@ -115,7 +142,7 @@ export function AvatarEditor({
       </div>
       <p className="text-sm text-muted">JPEG, PNG или WebP, до 5 МБ</p>
       {error && (
-        <Alert status="danger">
+        <Alert status="danger" role="alert">
           <Alert.Indicator />
           <Alert.Content>
             <Alert.Description>{error}</Alert.Description>

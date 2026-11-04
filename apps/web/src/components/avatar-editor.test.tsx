@@ -105,4 +105,63 @@ describe('AvatarEditor: удаление', () => {
     expect(url).toBe('/api/profile/avatar')
     expect(init.method).toBe('DELETE')
   })
+
+  const openDialog = async () => {
+    await userEvent.click(screen.getByRole('button', { name: 'Удалить аватар' }))
+    const dialog = await screen.findByRole('alertdialog')
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Удалить' }))
+    return dialog
+  }
+
+  it('при 401 закрывает диалог и уводит на /login', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(401, { message: 'Unauthorized' }))
+    render(<AvatarEditor name={me.name} hasAvatar avatarVersion={1} />)
+    await openDialog()
+
+    await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/login'))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    expect(router.refresh).not.toHaveBeenCalled()
+  })
+
+  it('404 считается успехом: диалог закрывается, страницы обновляются', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(404, { message: 'Not Found' }))
+    render(<AvatarEditor name={me.name} hasAvatar avatarVersion={1} />)
+    await openDialog()
+
+    await waitFor(() => expect(router.refresh).toHaveBeenCalled())
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+  })
+
+  it('при 500 показывает ошибку в диалоге и не обновляет страницы', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(500, { message: 'Сбой сервера' }))
+    const { container } = render(<AvatarEditor name={me.name} hasAvatar avatarVersion={3} />)
+    const dialog = await openDialog()
+
+    expect(await within(dialog).findByText('Сбой сервера')).toBeInTheDocument()
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    expect(router.refresh).not.toHaveBeenCalled()
+    expect(container.querySelector('img')).toHaveAttribute('src', '/api/profile/avatar?v=3')
+  })
+
+  it('убирает старую ошибку загрузки после удаления', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(415, { message: 'Неподдерживаемый формат' }))
+    render(<AvatarEditor name={me.name} hasAvatar avatarVersion={1} />)
+    await pick(png())
+    expect(await screen.findByText('Неподдерживаемый формат')).toBeInTheDocument()
+
+    fetchMock.mockResolvedValueOnce({ ok: true, status: 204 } as Response)
+    await openDialog()
+
+    await waitFor(() => expect(router.refresh).toHaveBeenCalled())
+    expect(screen.queryByText('Неподдерживаемый формат')).not.toBeInTheDocument()
+  })
+})
+
+describe('AvatarEditor: доступность', () => {
+  it('ошибка загрузки объявляется как role="alert"', async () => {
+    render(<AvatarEditor name={me.name} hasAvatar={false} avatarVersion={null} />)
+    await pick(new File(['x'], 'doc.pdf', { type: 'application/pdf' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Допустимы только JPEG, PNG и WebP')
+  })
 })
