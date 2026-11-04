@@ -1,10 +1,13 @@
 import { ArrowLeft } from '@gravity-ui/icons'
 import { Skeleton } from '@heroui/react'
+import type { Metadata } from 'next'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { Suspense } from 'react'
 import { ProfileCard } from '@/components/profile-card'
 import { getCurrentUser } from '@/lib/server/auth'
+
+export const metadata: Metadata = { title: 'Профиль — Video Meetings' }
 
 async function Profile() {
   const user = await getCurrentUser()
