@@ -36,6 +36,6 @@ import { TokenService } from './token.service.js'
     LoginUserHandler,
     GetCurrentUserHandler,
   ],
-  exports: [JwtModule, JwtAuthGuard, TokenService],
+  exports: [JwtModule, JwtAuthGuard],
 })
 export class AuthModule {}

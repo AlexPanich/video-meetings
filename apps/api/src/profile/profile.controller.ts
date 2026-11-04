@@ -17,7 +17,6 @@ import {
   ApiBadRequestResponse,
   ApiBearerAuth,
   ApiBody,
-  ApiConflictResponse,
   ApiConsumes,
   ApiNoContentResponse,
   ApiNotFoundResponse,
@@ -33,8 +32,7 @@ import { DeleteAvatarCommand } from './commands/delete-avatar.command.js'
 import { GetAvatarQuery } from './queries/get-avatar.query.js'
 import { UploadAvatarCommand } from './commands/upload-avatar.command.js'
 import { UpdateProfileCommand } from './commands/update-profile.command.js'
-import { ChangePasswordCommand } from './commands/change-password.command.js'
-import { AuthResultDto, ChangePasswordDto, PublicUserDto, UpdateProfileDto } from './dto.js'
+import { PublicUserDto, UpdateProfileDto } from './dto.js'
 
 @ApiTags('profile')
 @ApiBearerAuth()
@@ -65,32 +63,6 @@ export class ProfileController {
   })
   update(@Req() req: AuthenticatedRequest, @Body() { name }: UpdateProfileDto) {
     return this.commandBus.execute(new UpdateProfileCommand(req.userId, name))
-  }
-
-  @Put('password')
-  @ApiOperation({
-    summary: 'Сменить пароль',
-    description:
-      'Проверяет текущий пароль, меняет пароль и увеличивает версию токенов: все ранее выданные токены (включая текущий) перестают действовать. В ответе новый токен. Неверный текущий пароль возвращает 400, а не 401, чтобы клиент не сбрасывал сессию.',
-  })
-  @ApiOkResponse({ type: AuthResultDto, description: 'Новый токен и пользователь' })
-  @ApiBadRequestResponse({
-    description:
-      'Неверный текущий пароль, новый короче 8 символов или совпадает с текущим, поля не строки',
-  })
-  @ApiUnauthorizedResponse({
-    description: 'Нет токена, токен недействителен (в том числе после смены пароля)',
-  })
-  @ApiConflictResponse({ description: 'Пароль был изменён одновременно другим запросом' })
-  @HttpCode(200)
-  @Header('Cache-Control', 'no-store')
-  changePassword(
-    @Req() req: AuthenticatedRequest,
-    @Body() { currentPassword, newPassword }: ChangePasswordDto,
-  ) {
-    return this.commandBus.execute(
-      new ChangePasswordCommand(req.userId, currentPassword, newPassword),
-    )
   }
 
   @Put('avatar')
