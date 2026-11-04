@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react'
+import { Activity } from 'react'
 import userEvent from '@testing-library/user-event'
 import { ProfileNameForm } from './profile-name-form'
 
@@ -73,6 +74,46 @@ describe('ProfileNameForm', () => {
 
     expect(await screen.findByText('name содержит недопустимые символы')).toBeInTheDocument()
     expect(router.push).not.toHaveBeenCalled()
+  })
+
+  it('не отправляет запрос повторно, пока идёт сохранение', async () => {
+    let resolve!: (response: Response) => void
+    fetchMock.mockReturnValue(new Promise<Response>((r) => (resolve = r)))
+    render(<ProfileNameForm initialName="Иван" />)
+    await submitWith('Пётр')
+    const user = userEvent.setup()
+    const input = screen.getByLabelText('Имя')
+    await user.type(input, '{Enter}')
+    await user.type(input, '{Enter}')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    resolve(jsonResponse(200, { id: '1', email: 'ivan@example.com', name: 'Пётр' }))
+    await waitFor(() => expect(router.push).toHaveBeenCalledTimes(1))
+  })
+
+  it('при скрытии страницы сбрасывает введённое и ошибку (Next 16 хранит ушедшие страницы)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(400, { message: 'Что-то не так с именем' }))
+    const { rerender } = render(
+      <Activity mode="visible">
+        <ProfileNameForm initialName="Иван" />
+      </Activity>,
+    )
+    await submitWith('Пётр')
+    expect(await screen.findByText('Что-то не так с именем')).toBeInTheDocument()
+
+    rerender(
+      <Activity mode="hidden">
+        <ProfileNameForm initialName="Иван" />
+      </Activity>,
+    )
+    rerender(
+      <Activity mode="visible">
+        <ProfileNameForm initialName="Иван" />
+      </Activity>,
+    )
+
+    expect(screen.queryByText('Что-то не так с именем')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Имя')).toHaveValue('Иван')
   })
 
   it('при 401 уводит на /login', async () => {

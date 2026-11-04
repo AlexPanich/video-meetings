@@ -20,7 +20,8 @@ async function EditProfile() {
         <UserAvatar name={user.name} className="size-16 text-xl" />
         <p className="text-muted">{user.email}</p>
       </div>
-      <ProfileNameForm initialName={user.name} />
+      {/* key: после сохранения или смены пользователя форма создаётся заново, а не хранит старый ввод */}
+      <ProfileNameForm key={`${user.id}:${user.name}`} initialName={user.name} />
     </div>
   )
 }
