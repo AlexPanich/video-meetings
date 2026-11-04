@@ -54,9 +54,7 @@ if (issues.length > 0) {
   fs.writeFileSync(counterFile, JSON.stringify(counter))
 
   const next = issues[0]
-  log(
-    `🔄 Итерация ${counter.count}/${config.maxIterations} — Issue #${next.number}: ${next.title}`,
-  )
+  log(`🔄 Итерация ${counter.count}/${config.maxIterations} — Issue #${next.number}: ${next.title}`)
 
   const prompt = config.prompt
     .replace('{milestone}', config.milestone)
@@ -66,36 +64,49 @@ if (issues.length > 0) {
   // Milestone закрыт — сбрасываем счётчик и создаём PR
   log(`✅ Milestone завершён. Создаём PR.`)
   fs.writeFileSync(counterFile, JSON.stringify({ count: 0 }))
-  // Описание PR: закрытые Issues milestone (Closes #N) и список коммитов ветки
-  const closed = JSON.parse(
-    execSync(
-      `gh issue list --milestone "${config.milestone}" --state closed --limit 100 --json number,title`,
-    ).toString(),
-  )
-  const commits = execSync(`git log origin/main..${config.branch} --pretty=format:"- %s"`)
-    .toString()
-    .trim()
-  const body = [
-    '## Что сделано',
-    `Milestone: ${config.milestone}`,
-    '',
-    '## Закрытые Issues',
-    ...closed.map((i) => `Closes #${i.number} — ${i.title}`),
-    '',
-    '## Коммиты',
-    commits,
-    '',
-    '🤖 Generated with [Claude Code](https://claude.com/claude-code)',
-  ].join('\n')
-  const bodyFile = require('path').join(require('os').tmpdir(), `ralph-pr-body-${process.pid}.md`)
-  fs.writeFileSync(bodyFile, body)
-  const prUrl = execSync(
-    `gh pr create --title "feat: ${config.milestone}" --body-file "${bodyFile}" --base main --head ${config.branch}`,
-  )
-    .toString()
-    .trim()
-  fs.rmSync(bodyFile, { force: true })
-  log(`PR создан: ${prUrl}`)
+  // Если PR для ветки уже есть (повторный запуск после сбоя ревью), берём его, а не создаём новый
+  let prUrl = ''
+  try {
+    prUrl = execSync(
+      `gh pr view ${config.branch} --json url,state --jq 'select(.state=="OPEN").url'`,
+    )
+      .toString()
+      .trim()
+  } catch {}
+  if (prUrl) {
+    log(`PR уже существует: ${prUrl}`)
+  } else {
+    // Описание PR: закрытые Issues milestone (Closes #N) и список коммитов ветки
+    const closed = JSON.parse(
+      execSync(
+        `gh issue list --milestone "${config.milestone}" --state closed --limit 100 --json number,title`,
+      ).toString(),
+    )
+    const commits = execSync(`git log origin/main..${config.branch} --pretty=format:"- %s"`)
+      .toString()
+      .trim()
+    const body = [
+      '## Что сделано',
+      `Milestone: ${config.milestone}`,
+      '',
+      '## Закрытые Issues',
+      ...closed.map((i) => `Closes #${i.number} — ${i.title}`),
+      '',
+      '## Коммиты',
+      commits,
+      '',
+      '🤖 Generated with [Claude Code](https://claude.com/claude-code)',
+    ].join('\n')
+    const bodyFile = require('path').join(require('os').tmpdir(), `ralph-pr-body-${process.pid}.md`)
+    fs.writeFileSync(bodyFile, body)
+    prUrl = execSync(
+      `gh pr create --title "feat: ${config.milestone}" --body-file "${bodyFile}" --base main --head ${config.branch}`,
+    )
+      .toString()
+      .trim()
+    fs.rmSync(bodyFile, { force: true })
+    log(`PR создан: ${prUrl}`)
+  }
 
   log('🔍 Запускаем финальное ревью через Opus...')
   const reviewPrompt =
