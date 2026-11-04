@@ -12,4 +12,8 @@ const prompt = config.prompt
   .replace('{branch}', config.branch)
 console.log(`🚀 Запускаем Ralph для milestone: ${config.milestone}`)
 
-execSync(`claude -p "${prompt}" --max-turns ${config.maxTurns}`, { stdio: 'inherit' })
+// RALPH_ACTIVE=1 включает Stop-хук (.claude/hooks/stop.js) во вложенных сессиях
+execSync(`claude -p "${prompt}" --max-turns ${config.maxTurns}`, {
+  stdio: 'inherit',
+  env: { ...process.env, RALPH_ACTIVE: '1' },
+})
