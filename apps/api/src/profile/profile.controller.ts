@@ -18,6 +18,8 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiConsumes,
+  ApiConflictResponse,
+  ApiForbiddenResponse,
   ApiNoContentResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
@@ -32,7 +34,8 @@ import { DeleteAvatarCommand } from './commands/delete-avatar.command.js'
 import { GetAvatarQuery } from './queries/get-avatar.query.js'
 import { UploadAvatarCommand } from './commands/upload-avatar.command.js'
 import { UpdateProfileCommand } from './commands/update-profile.command.js'
-import { PublicUserDto, UpdateProfileDto } from './dto.js'
+import { ChangePasswordCommand } from './commands/change-password.command.js'
+import { AuthResultDto, ChangePasswordDto, PublicUserDto, UpdateProfileDto } from './dto.js'
 
 @ApiTags('profile')
 @ApiBearerAuth()
@@ -63,6 +66,36 @@ export class ProfileController {
   })
   update(@Req() req: AuthenticatedRequest, @Body() { name }: UpdateProfileDto) {
     return this.commandBus.execute(new UpdateProfileCommand(req.userId, name))
+  }
+
+  @Put('password')
+  @ApiOperation({
+    summary: 'Сменить свой пароль',
+    description:
+      'Нужен текущий пароль. Все ранее выданные токены (включая текущий) перестают действовать; в ответе новый токен, как при входе. Новый пароль: 8–128 символов (то же ограничение при регистрации), не совпадает с текущим.',
+  })
+  @ApiOkResponse({ type: AuthResultDto, description: 'Новый токен и пользователь' })
+  @ApiBadRequestResponse({
+    description:
+      'Новый пароль короче 8 или длиннее 128 символов, совпадает с текущим, поля пропущены',
+  })
+  @ApiForbiddenResponse({
+    description: 'Неверный текущий пароль (не 401, чтобы клиент не сбрасывал сессию)',
+  })
+  @ApiConflictResponse({
+    description:
+      'Пароль одновременно сменил другой запрос: проигравший получает 409, прежний токен после этого недействителен',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Нет токена, токен недействителен или пользователь удалён',
+  })
+  changePassword(
+    @Req() req: AuthenticatedRequest,
+    @Body() { currentPassword, newPassword }: ChangePasswordDto,
+  ) {
+    return this.commandBus.execute(
+      new ChangePasswordCommand(req.userId, currentPassword, newPassword),
+    )
   }
 
   @Put('avatar')
