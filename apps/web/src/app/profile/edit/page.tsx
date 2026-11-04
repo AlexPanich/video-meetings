@@ -28,7 +28,7 @@ async function EditProfile() {
       {/* key: после сохранения или смены пользователя форма создаётся заново, а не хранит старый ввод */}
       <ProfileNameForm key={`${user.id}:${user.name}`} initialName={user.name} />
       <hr className="border-border" />
-      <ChangePasswordForm key={user.id} />
+      <ChangePasswordForm key={user.id} email={user.email} />
     </div>
   )
 }

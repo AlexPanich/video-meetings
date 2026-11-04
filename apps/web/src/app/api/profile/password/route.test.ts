@@ -49,7 +49,9 @@ describe('PUT /api/profile/password', () => {
     expect(url).toBe('http://localhost:3001/profile/password')
     expect(init.method).toBe('PUT')
     expect(new Headers(init.headers).get('authorization')).toBe('Bearer old-token')
-    expect(JSON.parse(String(init.body))).toEqual(passwords)
+    // тело уходит потоком, а не буферизуется в память
+    expect(init.body).toBeInstanceOf(ReadableStream)
+    expect(await new Response(init.body as ReadableStream).json()).toEqual(passwords)
   })
 
   it.each([
