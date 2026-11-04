@@ -21,6 +21,14 @@ describe('validateName', () => {
     expect(validateName('я'.repeat(NAME_MAX_LENGTH + 1))).toBe('Имя не длиннее 100 символов')
   })
 
+  it('считает длину в символах, а не в единицах UTF-16 (как class-validator в API)', () => {
+    // 60 символов = 119 единиц UTF-16; буква нужна, имя только из эмодзи не принимается
+    expect(validateName(`a${'😀'.repeat(59)}`)).toBeNull()
+    expect(validateName(`a${'😀'.repeat(99)}`)).toBeNull()
+    expect(validateName(`a${'😀'.repeat(100)}`)).toBe('Имя не длиннее 100 символов')
+    expect(validateName('𠮷'.repeat(100))).toBeNull()
+  })
+
   it('отклоняет управляющие символы', () => {
     expect(validateName('a\u0000b')).toBe('Имя содержит недопустимые символы')
     expect(validateName('a\nb')).toBe('Имя содержит недопустимые символы')
