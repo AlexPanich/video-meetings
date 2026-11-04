@@ -116,7 +116,14 @@ if (issues.length > 0) {
     `Если публикация не удалась, выведи причину и сохрани текст ревью в .pr-review.json. ` +
     `После 502 сначала проверь список отзывов, чтобы не создать дубль.`
   try {
-    execSync(`claude -p "${reviewPrompt}" --model claude-opus-5-5`, { stdio: nestedStdio() })
+    // Ревью-сессия заканчивается своим Stop-событием. Без отключения RALPH_ACTIVE хук сработал бы
+    // в ней снова: milestone закрыт → «PR уже существует» → ещё одно ревью, и так по цепочке.
+    // Цикл итераций держится на рекурсии хука, а ревью — финальный шаг, ему хук не нужен.
+    const { RALPH_ACTIVE, ...reviewEnv } = process.env
+    execSync(`claude -p "${reviewPrompt}" --model claude-opus-5-5`, {
+      stdio: nestedStdio(),
+      env: reviewEnv,
+    })
   } catch (e) {
     log(`⚠️ Ревью не выполнено: ${e.message}`)
   }

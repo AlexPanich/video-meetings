@@ -18,6 +18,7 @@
       "Bash(gh issue comment:*)",
       "Bash(git commit --no-verify -m \"test(*)",
       "Bash(gh issue close:*)",
+      "Bash(node .claude/hooks/log-issue.js:*)",
       "Bash(gh pr view:*)",
       "Bash(gh pr diff:*)",
       "Bash(gh pr comment:*)",
