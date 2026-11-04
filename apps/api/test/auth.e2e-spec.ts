@@ -59,7 +59,13 @@ describe('Auth (e2e)', () => {
       const res = await register({ email, password: PASSWORD, name: 'Alice' }).expect(201)
 
       expect(res.body.accessToken).toEqual(expect.any(String))
-      expect(res.body.user).toEqual({ id: expect.any(String), email, name: 'Alice' })
+      expect(res.body.user).toEqual({
+        id: expect.any(String),
+        email,
+        name: 'Alice',
+        hasAvatar: false,
+        avatarVersion: null,
+      })
     })
 
     it('выпускает валидный HS256 JWT с sub = id пользователя и сроком жизни', async () => {
@@ -135,7 +141,13 @@ describe('Auth (e2e)', () => {
       const res = await login({ email, password: PASSWORD }).expect(200)
 
       expect(res.body.accessToken).toEqual(expect.any(String))
-      expect(res.body.user).toEqual({ id: expect.any(String), email, name: 'Alice' })
+      expect(res.body.user).toEqual({
+        id: expect.any(String),
+        email,
+        name: 'Alice',
+        hasAvatar: false,
+        avatarVersion: null,
+      })
       expect(decodeJwt(res.body.accessToken).payload.sub).toBe(res.body.user.id)
     })
 
@@ -179,7 +191,13 @@ describe('Auth (e2e)', () => {
         .set('Authorization', `Bearer ${body.accessToken}`)
         .expect(200)
 
-      expect(res.body).toEqual({ id: body.user.id, email, name: 'Alice' })
+      expect(res.body).toEqual({
+        id: body.user.id,
+        email,
+        name: 'Alice',
+        hasAvatar: false,
+        avatarVersion: null,
+      })
     })
 
     it('возвращает текущего пользователя по JWT из логина', async () => {

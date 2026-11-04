@@ -47,7 +47,7 @@ describe('Profile (e2e)', () => {
 
       const res = await patch(token, { name: 'Bob' }).expect(200)
 
-      expect(res.body).toEqual({ id, email, name: 'Bob' })
+      expect(res.body).toEqual({ id, email, name: 'Bob', hasAvatar: false, avatarVersion: null })
       expect(res.body).not.toHaveProperty('passwordHash')
     })
 
@@ -156,7 +156,13 @@ describe('Profile (e2e)', () => {
         passwordHash: 'x',
       }).expect(200)
 
-      expect(res.body).toEqual({ id: first.id, email: first.email, name: 'Bob' })
+      expect(res.body).toEqual({
+        id: first.id,
+        email: first.email,
+        name: 'Bob',
+        hasAvatar: false,
+        avatarVersion: null,
+      })
       expect((await me(second.token).expect(200)).body.name).toBe('Carol')
     })
   })

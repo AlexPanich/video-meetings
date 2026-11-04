@@ -21,4 +21,6 @@ export class PublicUserDto {
   id: string
   email: string
   name: string
+  hasAvatar: boolean
+  avatarVersion: number | null
 }

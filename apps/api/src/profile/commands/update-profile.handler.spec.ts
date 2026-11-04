@@ -31,7 +31,13 @@ describe('UpdateProfileHandler', () => {
 
     const result = await handler.execute(command)
 
-    expect(result).toEqual({ id: user.id, email: user.email, name: user.name })
+    expect(result).toEqual({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      hasAvatar: false,
+      avatarVersion: null,
+    })
     expect(result).not.toHaveProperty('passwordHash')
   })
 
