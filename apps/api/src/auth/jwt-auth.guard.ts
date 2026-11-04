@@ -1,12 +1,19 @@
 import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common'
+import { QueryBus } from '@nestjs/cqrs'
 import { JwtService } from '@nestjs/jwt'
 import type { Request } from 'express'
+import { FindUserByIdQuery } from '../users/queries/find-user-by-id.query.js'
 
 export type AuthenticatedRequest = Request & { userId: string }
 
+type TokenPayload = { sub: string; ver?: number }
+
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
-  constructor(private readonly jwt: JwtService) {}
+  constructor(
+    private readonly jwt: JwtService,
+    private readonly queryBus: QueryBus,
+  ) {}
 
   async canActivate(context: ExecutionContext) {
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>()
@@ -14,12 +21,18 @@ export class JwtAuthGuard implements CanActivate {
     if (scheme !== 'Bearer' || !token) {
       throw new UnauthorizedException()
     }
+    let payload: TokenPayload
     try {
-      const payload = await this.jwt.verifyAsync<{ sub: string }>(token)
-      request.userId = payload.sub
-      return true
+      payload = await this.jwt.verifyAsync<TokenPayload>(token)
     } catch {
       throw new UnauthorizedException()
     }
+    // токен без версии считается версией 0: действующие сессии переживают выкатку
+    const user = await this.queryBus.execute(new FindUserByIdQuery(payload.sub))
+    if (!user || user.tokenVersion !== (payload.ver ?? 0)) {
+      throw new UnauthorizedException()
+    }
+    request.userId = payload.sub
+    return true
   }
 }
