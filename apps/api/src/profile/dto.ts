@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer'
-import { IsNotEmpty, IsString, Matches, MaxLength, MinLength } from 'class-validator'
+import { IsNotEmpty, IsString, Matches, MaxLength } from 'class-validator'
 
 // Максимальная длина имени пользователя (после обрезки пробелов)
 export const NAME_MAX_LENGTH = 100
@@ -23,25 +23,4 @@ export class PublicUserDto {
   name: string
   hasAvatar: boolean
   avatarVersion: number | null
-}
-
-const PASSWORD_MAX_LENGTH = 256
-
-export class ChangePasswordDto {
-  // верхний предел защищает scrypt от огромных строк
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(PASSWORD_MAX_LENGTH)
-  currentPassword: string
-
-  @IsString()
-  @MinLength(8)
-  @MaxLength(PASSWORD_MAX_LENGTH)
-  newPassword: string
-}
-
-// Схема ответа для Swagger: AuthResult — TS-интерфейс
-export class AuthResultDto {
-  accessToken: string
-  user: PublicUserDto
 }
