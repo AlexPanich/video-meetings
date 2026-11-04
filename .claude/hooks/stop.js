@@ -53,7 +53,8 @@ if (issues.length > 0) {
   counter.count++
   fs.writeFileSync(counterFile, JSON.stringify(counter))
 
-  const next = issues[0]
+  // gh отдаёт новые Issues первыми, а по правилам ralph.md берётся наименьший номер
+  const next = issues.sort((a, b) => a.number - b.number)[0]
   log(`🔄 Итерация ${counter.count}/${config.maxIterations} — Issue #${next.number}: ${next.title}`)
 
   const prompt = config.prompt
