@@ -53,15 +53,46 @@ if (issues.length > 0) {
   // Milestone закрыт — сбрасываем счётчик и создаём PR
   console.log(`✅ Milestone завершён. Создаём PR.`)
   fs.writeFileSync(counterFile, JSON.stringify({ count: 0 }))
+  // Описание PR: закрытые Issues milestone (Closes #N) и список коммитов ветки
+  const closed = JSON.parse(
+    execSync(
+      `gh issue list --milestone "${config.milestone}" --state closed --limit 100 --json number,title`,
+    ).toString(),
+  )
+  const commits = execSync(`git log origin/main..${config.branch} --pretty=format:"- %s"`)
+    .toString()
+    .trim()
+  const body = [
+    '## Что сделано',
+    `Milestone: ${config.milestone}`,
+    '',
+    '## Закрытые Issues',
+    ...closed.map((i) => `Closes #${i.number} — ${i.title}`),
+    '',
+    '## Коммиты',
+    commits,
+    '',
+    '🤖 Generated with [Claude Code](https://claude.com/claude-code)',
+  ].join('\n')
+  const bodyFile = require('path').join(require('os').tmpdir(), `ralph-pr-body-${process.pid}.md`)
+  fs.writeFileSync(bodyFile, body)
   const prUrl = execSync(
-    `gh pr create --title "feat: ${config.milestone}" --body "Closes all issues in milestone: ${config.milestone}" --base main --head ${config.branch}`,
+    `gh pr create --title "feat: ${config.milestone}" --body-file "${bodyFile}" --base main --head ${config.branch}`,
   )
     .toString()
     .trim()
+  fs.rmSync(bodyFile, { force: true })
 
   console.log('🔍 Запускаем финальное ревью через Opus...')
-  execSync(
-    `claude -p "Сделай детальное code review PR ${prUrl}. Проверь архитектуру, безопасность, производительность и соответствие PRD. Оставь комментарии прямо в PR через gh cli." --model claude-opus-5-5`,
-    { stdio: 'inherit' },
-  )
+  const reviewPrompt =
+    `Сделай детальное code review PR ${prUrl}. Проверь архитектуру, безопасность, производительность и соответствие PRD. ` +
+    `Опубликуй результат в PR одним отзывом с inline-комментариями: ` +
+    `gh api repos/{owner}/{repo}/pulls/<номер>/reviews --input <json-файл> (event COMMENT). ` +
+    `Если публикация не удалась, выведи причину и сохрани текст ревью в .pr-review.json. ` +
+    `После 502 сначала проверь список отзывов, чтобы не создать дубль.`
+  try {
+    execSync(`claude -p "${reviewPrompt}" --model claude-opus-5-5`, { stdio: 'inherit' })
+  } catch (e) {
+    console.log(`⚠️ Ревью не выполнено: ${e.message}`)
+  }
 }
