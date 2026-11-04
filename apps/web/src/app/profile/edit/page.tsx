@@ -4,6 +4,7 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { Suspense } from 'react'
+import { ChangePasswordForm } from '@/components/change-password-form'
 import { ProfileNameForm } from '@/components/profile-name-form'
 import { AvatarEditor } from '@/components/avatar-editor'
 import { getCurrentUser } from '@/lib/server/auth'
@@ -26,6 +27,8 @@ async function EditProfile() {
       </div>
       {/* key: после сохранения или смены пользователя форма создаётся заново, а не хранит старый ввод */}
       <ProfileNameForm key={`${user.id}:${user.name}`} initialName={user.name} />
+      <hr className="border-border" />
+      <ChangePasswordForm key={user.id} />
     </div>
   )
 }

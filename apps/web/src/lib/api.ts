@@ -80,6 +80,13 @@ export const getMe = () => request<User>('/auth/me')
 export const updateProfileName = (name: string) =>
   request<User>('/profile', { method: 'PATCH', body: JSON.stringify({ name }) })
 
+// Новый JWT ставится в HttpOnly-cookie на сервере (`/api/profile/password`), клиенту отдаётся только user
+export const changePassword = (currentPassword: string, newPassword: string) =>
+  request<AuthResult>('/profile/password', {
+    method: 'PUT',
+    body: JSON.stringify({ currentPassword, newPassword }),
+  })
+
 export const uploadAvatar = (file: File) => {
   const body = new FormData()
   body.append('file', file, file.name)
