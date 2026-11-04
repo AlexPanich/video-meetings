@@ -6,8 +6,8 @@ export type PublicUser = Pick<User, 'id' | 'email' | 'name'> & {
   avatarVersion: number | null
 }
 
-export type UserLike = Pick<User, 'id' | 'email' | 'name'> &
-  Partial<Pick<User, 'avatarStorageName' | 'avatarUpdatedAt'>>
+// поля аватара обязательны: иначе вызов без них скомпилируется и молча даст hasAvatar: false
+export type UserLike = Pick<User, 'id' | 'email' | 'name' | 'avatarStorageName' | 'avatarUpdatedAt'>
 
 export const toPublicUser = ({
   id,
