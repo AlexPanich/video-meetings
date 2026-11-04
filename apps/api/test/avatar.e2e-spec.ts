@@ -95,6 +95,7 @@ describe('Avatar (e2e)', () => {
       const got = await get(auth).expect(200)
       expect(got.headers['content-type']).toContain(mime)
       expect(got.headers['x-content-type-options']).toBe('nosniff')
+      expect(got.headers['cache-control']).toBe('private, max-age=31536000, immutable')
       expect(Buffer.compare(got.body as Buffer, content)).toBe(0)
     })
 
@@ -242,9 +243,10 @@ describe('Avatar (e2e)', () => {
   })
 
   describe('GET /profile/avatar', () => {
-    it('404, если аватара нет', async () => {
+    it('404, если аватара нет, и без Cache-Control', async () => {
       const auth = await registerUser()
-      await get(auth).expect(404)
+      const res = await get(auth).expect(404)
+      expect(res.headers['cache-control']).toBeUndefined()
     })
 
     it('отдаёт только свой аватар', async () => {

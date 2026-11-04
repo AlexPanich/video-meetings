@@ -1,5 +1,7 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { getInitials, UserAvatar } from './user-avatar'
+
+afterEach(() => vi.restoreAllMocks())
 
 describe('UserAvatar', () => {
   it('показывает инициалы имени и фамилии в верхнем регистре', () => {
@@ -10,6 +12,41 @@ describe('UserAvatar', () => {
   it('для одного слова показывает одну букву', () => {
     render(<UserAvatar name="Анна" />)
     expect(screen.getByText('А')).toBeInTheDocument()
+  })
+})
+
+describe('UserAvatar с изображением', () => {
+  it('показывает изображение из /api/profile/avatar с версией в URL', () => {
+    const { container } = render(
+      <UserAvatar name="Иван Петров" hasAvatar avatarVersion={1700000000000} />,
+    )
+    expect(container.querySelector('img')).toHaveAttribute(
+      'src',
+      '/api/profile/avatar?v=1700000000000',
+    )
+    expect(screen.queryByText('ИП')).not.toBeInTheDocument()
+  })
+
+  it('без аватара показывает инициалы и не рисует изображение', () => {
+    const { container } = render(<UserAvatar name="Иван Петров" hasAvatar={false} />)
+    expect(container.querySelector('img')).toBeNull()
+    expect(screen.getByText('ИП')).toBeInTheDocument()
+  })
+
+  it('при ошибке загрузки изображения возвращается к инициалам', () => {
+    const { container } = render(<UserAvatar name="Иван Петров" hasAvatar avatarVersion={1} />)
+    fireEvent.error(container.querySelector('img')!)
+    expect(container.querySelector('img')).toBeNull()
+    expect(screen.getByText('ИП')).toBeInTheDocument()
+  })
+
+  it('возвращается к инициалам, если изображение не загрузилось до гидратации', () => {
+    // событие error уже прошло, и React его не увидит: остаётся состояние элемента
+    vi.spyOn(HTMLImageElement.prototype, 'complete', 'get').mockReturnValue(true)
+    vi.spyOn(HTMLImageElement.prototype, 'naturalWidth', 'get').mockReturnValue(0)
+    const { container } = render(<UserAvatar name="Иван Петров" hasAvatar avatarVersion={1} />)
+    expect(container.querySelector('img')).toBeNull()
+    expect(screen.getByText('ИП')).toBeInTheDocument()
   })
 })
 

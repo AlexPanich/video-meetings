@@ -8,9 +8,11 @@ import {
   Patch,
   Put,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common'
 import { CommandBus, QueryBus } from '@nestjs/cqrs'
+import type { Response } from 'express'
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
@@ -105,8 +107,12 @@ export class ProfileController {
   @ApiUnauthorizedResponse({
     description: 'Нет токена, токен недействителен или пользователь удалён',
   })
-  getAvatar(@Req() req: AuthenticatedRequest) {
-    return this.queryBus.execute(new GetAvatarQuery(req.userId))
+  async getAvatar(@Req() req: AuthenticatedRequest, @Res({ passthrough: true }) res: Response) {
+    const avatar = await this.queryBus.execute(new GetAvatarQuery(req.userId))
+    // Только для успешного ответа (ошибки кэшироваться не должны). URL содержит версию аватара
+    // (avatarVersion), поэтому при замене браузер запрашивает новый адрес; private — не для общих кэшей
+    res.setHeader('Cache-Control', 'private, max-age=31536000, immutable')
+    return avatar
   }
 
   @Delete('avatar')

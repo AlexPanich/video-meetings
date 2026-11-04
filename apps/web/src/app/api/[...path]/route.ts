@@ -7,6 +7,7 @@ const PASSTHROUGH_RESPONSE_HEADERS = [
   'content-type',
   'content-disposition',
   'content-length',
+  'cache-control',
   'x-content-type-options',
 ]
 

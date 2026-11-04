@@ -5,7 +5,12 @@ import type { User } from '@/lib/api'
 export function ProfileCard({ user }: { user: User }) {
   return (
     <div className="flex flex-col items-center gap-4 rounded-2xl border border-border p-8 text-center">
-      <UserAvatar name={user.name} className="size-20 text-2xl" />
+      <UserAvatar
+        name={user.name}
+        hasAvatar={user.hasAvatar}
+        avatarVersion={user.avatarVersion}
+        className="size-20 text-2xl"
+      />
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">{user.name}</h1>
         <p className="mt-1 text-muted">{user.email}</p>
