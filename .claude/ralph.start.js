@@ -12,6 +12,16 @@ const prompt = config.prompt
   .replace('{branch}', config.branch)
 console.log(`🚀 Запускаем Ralph для milestone: ${config.milestone}`)
 
+// Первую итерацию запускаем мы, а не хук, поэтому и в лог её Issue записываем здесь
+// (по правилам ralph.md берётся открытая Issue с наименьшим номером)
+try {
+  const open = JSON.parse(
+    execSync(`gh issue list --milestone "${config.milestone}" --state open --json number`).toString(),
+  )
+  const first = Math.min(...open.map((i) => i.number))
+  if (Number.isFinite(first)) execSync(`node .claude/hooks/log-issue.js ${first}`)
+} catch {}
+
 // RALPH_ACTIVE=1 включает Stop-хук (.claude/hooks/stop.js) во вложенных сессиях
 execSync(`claude -p "${prompt}" --max-turns ${config.maxTurns}`, {
   stdio: 'inherit',
