@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { getInitials, UserAvatar } from './user-avatar'
 
 describe('UserAvatar', () => {
@@ -10,6 +10,32 @@ describe('UserAvatar', () => {
   it('для одного слова показывает одну букву', () => {
     render(<UserAvatar name="Анна" />)
     expect(screen.getByText('А')).toBeInTheDocument()
+  })
+})
+
+describe('UserAvatar с изображением', () => {
+  it('показывает изображение из /api/profile/avatar с версией в URL', () => {
+    const { container } = render(
+      <UserAvatar name="Иван Петров" hasAvatar avatarVersion={1700000000000} />,
+    )
+    expect(container.querySelector('img')).toHaveAttribute(
+      'src',
+      '/api/profile/avatar?v=1700000000000',
+    )
+    expect(screen.queryByText('ИП')).not.toBeInTheDocument()
+  })
+
+  it('без аватара показывает инициалы и не рисует изображение', () => {
+    const { container } = render(<UserAvatar name="Иван Петров" hasAvatar={false} />)
+    expect(container.querySelector('img')).toBeNull()
+    expect(screen.getByText('ИП')).toBeInTheDocument()
+  })
+
+  it('при ошибке загрузки изображения возвращается к инициалам', () => {
+    const { container } = render(<UserAvatar name="Иван Петров" hasAvatar avatarVersion={1} />)
+    fireEvent.error(container.querySelector('img')!)
+    expect(container.querySelector('img')).toBeNull()
+    expect(screen.getByText('ИП')).toBeInTheDocument()
   })
 })
 
