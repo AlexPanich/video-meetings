@@ -2,6 +2,7 @@
 import { randomUUID } from 'node:crypto'
 import { Test, TestingModule } from '@nestjs/testing'
 import { INestApplication } from '@nestjs/common'
+import { JwtService } from '@nestjs/jwt'
 import request from 'supertest'
 import { App } from 'supertest/types.js'
 import { AppModule } from './../src/app.module.js'
@@ -167,6 +168,52 @@ describe('Password (e2e)', () => {
         .put('/profile/password')
         .send({ currentPassword: PASSWORD, newPassword: NEW_PASSWORD })
         .expect(401)
+    })
+
+    it('токен без версии (выдан до введения ver) получает 401 после смены пароля', async () => {
+      const { id, token } = await registerUser()
+      const legacyToken = await app.get(JwtService).signAsync({ sub: id })
+      await get('/auth/me', legacyToken).expect(200)
+
+      await changePassword(token, { currentPassword: PASSWORD, newPassword: NEW_PASSWORD }).expect(
+        200,
+      )
+
+      await get('/auth/me', legacyToken).expect(401)
+    })
+
+    it('принимает новый пароль длиной ровно 128 символов и отклоняет 129', async () => {
+      const { email, token } = await registerUser()
+
+      await changePassword(token, {
+        currentPassword: PASSWORD,
+        newPassword: 'a'.repeat(129),
+      }).expect(400)
+      const res = await changePassword(token, {
+        currentPassword: PASSWORD,
+        newPassword: 'a'.repeat(128),
+      }).expect(200)
+
+      await login(email, 'a'.repeat(128)).expect(200)
+      await get('/auth/me', res.body.accessToken as string).expect(200)
+    })
+
+    it('при параллельной смене проходит один запрос, проигравший не получает 200', async () => {
+      const { email, token } = await registerUser()
+
+      const results = await Promise.all(
+        ['Parallel-Pass-1!', 'Parallel-Pass-2!'].map((newPassword) =>
+          changePassword(token, { currentPassword: PASSWORD, newPassword }),
+        ),
+      )
+
+      const statuses = results.map((r) => r.status).sort()
+      // проигравший: 409 (оба прошли гард) либо 401 (первый успел закоммитить до гарда второго)
+      expect(statuses[0]).toBe(200)
+      expect([401, 409]).toContain(statuses[1])
+      const winner = results.findIndex((r) => r.status === 200)
+      await login(email, ['Parallel-Pass-1!', 'Parallel-Pass-2!'][winner]).expect(200)
+      await login(email, PASSWORD).expect(401)
     })
 
     it('не затрагивает других пользователей', async () => {

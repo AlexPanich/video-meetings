@@ -1,5 +1,8 @@
 import { Transform } from 'class-transformer'
-import { IsEmail, IsNotEmpty, IsString, MinLength } from 'class-validator'
+import { IsEmail, IsNotEmpty, IsString, MaxLength, MinLength } from 'class-validator'
+
+// Максимальная длина нового пароля: при регистрации и смене одинаковая, иначе пароль нельзя сменить
+export const PASSWORD_MAX_LENGTH = 128
 
 const normalizeEmail = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim().toLowerCase() : value
@@ -21,6 +24,7 @@ export class RegisterDto {
 
   @IsString()
   @MinLength(8)
+  @MaxLength(PASSWORD_MAX_LENGTH)
   password: string
 
   @IsString()

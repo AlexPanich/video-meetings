@@ -38,7 +38,7 @@ export class ChangePasswordHandler implements ICommandHandler<ChangePasswordComm
     )
     // пользователь удалён или пароль уже сменили параллельным запросом; 409, а не 401,
     // чтобы проигравший запрос не выглядел как сбой сессии
-    if (!updated) throw new ConflictException('Пароль уже был изменён, повторите попытку')
+    if (!updated) throw new ConflictException('Пароль уже был изменён другим запросом')
     return this.tokens.issue(updated)
   }
 }

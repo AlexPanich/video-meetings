@@ -18,6 +18,7 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiConsumes,
+  ApiConflictResponse,
   ApiForbiddenResponse,
   ApiNoContentResponse,
   ApiNotFoundResponse,
@@ -71,7 +72,7 @@ export class ProfileController {
   @ApiOperation({
     summary: 'Сменить свой пароль',
     description:
-      'Нужен текущий пароль. Все ранее выданные токены (включая текущий) перестают действовать; в ответе новый токен, как при входе. Новый пароль: 8–128 символов, не совпадает с текущим.',
+      'Нужен текущий пароль. Все ранее выданные токены (включая текущий) перестают действовать; в ответе новый токен, как при входе. Новый пароль: 8–128 символов (то же ограничение при регистрации), не совпадает с текущим.',
   })
   @ApiOkResponse({ type: AuthResultDto, description: 'Новый токен и пользователь' })
   @ApiBadRequestResponse({
@@ -80,6 +81,10 @@ export class ProfileController {
   })
   @ApiForbiddenResponse({
     description: 'Неверный текущий пароль (не 401, чтобы клиент не сбрасывал сессию)',
+  })
+  @ApiConflictResponse({
+    description:
+      'Пароль одновременно сменил другой запрос: проигравший получает 409, прежний токен после этого недействителен',
   })
   @ApiUnauthorizedResponse({
     description: 'Нет токена, токен недействителен или пользователь удалён',

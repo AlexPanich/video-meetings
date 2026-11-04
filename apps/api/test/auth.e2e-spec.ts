@@ -121,6 +121,10 @@ describe('Auth (e2e)', () => {
       ['пароль отсутствует', { email: 'a@example.com', name: 'Alice' }],
       ['пароль слишком короткий', { email: 'a@example.com', password: '123', name: 'Alice' }],
       ['пароль не строка', { email: 'a@example.com', password: 12345678, name: 'Alice' }],
+      [
+        'пароль длиннее 128 символов',
+        { email: 'a@example.com', password: 'a'.repeat(129), name: 'Alice' },
+      ],
       ['имя отсутствует', { email: 'a@example.com', password: PASSWORD }],
       ['имя пустое', { email: 'a@example.com', password: PASSWORD, name: '' }],
     ])('возвращает 400, если %s', async (_title, body) => {
