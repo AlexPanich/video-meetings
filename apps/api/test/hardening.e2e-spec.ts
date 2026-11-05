@@ -90,19 +90,31 @@ describe('Hardening (e2e)', () => {
     })
   })
 
-  describe('Swagger в production', () => {
-    const previous = process.env.NODE_ENV
-
-    beforeEach(async () => {
-      process.env.NODE_ENV = 'production'
-      await createApp()
-    })
+  describe('Swagger закрыт по умолчанию', () => {
+    const previous = {
+      NODE_ENV: process.env.NODE_ENV,
+      SWAGGER_ENABLED: process.env.SWAGGER_ENABLED,
+    }
 
     afterEach(() => {
-      process.env.NODE_ENV = previous
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
     })
 
-    it('/docs и /docs-json недоступны', async () => {
+    it('без SWAGGER_ENABLED (и без NODE_ENV) /docs и /docs-json недоступны', async () => {
+      delete process.env.SWAGGER_ENABLED
+      delete process.env.NODE_ENV
+      await createApp()
+      await http().get('/docs').expect(404)
+      await http().get('/docs-json').expect(404)
+    })
+
+    it('в production закрыт, даже если SWAGGER_ENABLED=true', async () => {
+      process.env.NODE_ENV = 'production'
+      process.env.SWAGGER_ENABLED = 'true'
+      await createApp()
       await http().get('/docs').expect(404)
       await http().get('/docs-json').expect(404)
     })

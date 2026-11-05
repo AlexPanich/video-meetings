@@ -91,4 +91,42 @@ describe('PUT /api/profile/password', () => {
 
     expect(response.status).toBe(502)
   })
+
+  it('429: передаёт Retry-After и добавляет ожидание в сообщение', async () => {
+    fetchMock.mockResolvedValue(
+      Response.json(
+        { message: 'Слишком много попыток, повторите позже' },
+        { status: 429, headers: { 'Retry-After': '42' } },
+      ),
+    )
+
+    const response = await put(passwords)
+
+    expect(response.status).toBe(429)
+    expect(response.headers.get('retry-after')).toBe('42')
+    expect(await response.json()).toEqual({
+      message: 'Слишком много попыток, повторите позже. Подождите 42 с',
+    })
+  })
+
+  it('передаёт IP клиента из доверенного X-Forwarded-For', async () => {
+    vi.stubEnv('TRUSTED_PROXIES', '1')
+    fetchMock.mockResolvedValue(Response.json({ accessToken: 't', user }))
+
+    await PUT(
+      new NextRequest('http://localhost/api/profile/password', {
+        method: 'PUT',
+        headers: {
+          cookie: 'access-token=old',
+          'content-type': 'application/json',
+          'x-forwarded-for': '6.6.6.6, 203.0.113.7',
+        },
+        body: JSON.stringify(passwords),
+      }),
+    )
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new Headers(init.headers).get('x-forwarded-for')).toBe('203.0.113.7')
+    vi.unstubAllEnvs()
+  })
 })

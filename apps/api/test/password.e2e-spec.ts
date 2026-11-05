@@ -170,14 +170,9 @@ describe('Password (e2e)', () => {
         .expect(401)
     })
 
-    it('токен без версии (выдан до введения ver) получает 401 после смены пароля', async () => {
-      const { id, token } = await registerUser()
+    it('токен без версии (выдан до введения ver) отклоняется: 401', async () => {
+      const { id } = await registerUser()
       const legacyToken = await app.get(JwtService).signAsync({ sub: id })
-      await get('/auth/me', legacyToken).expect(200)
-
-      await changePassword(token, { currentPassword: PASSWORD, newPassword: NEW_PASSWORD }).expect(
-        200,
-      )
 
       await get('/auth/me', legacyToken).expect(401)
     })

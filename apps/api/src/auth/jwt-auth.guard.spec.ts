@@ -25,11 +25,6 @@ describe('JwtAuthGuard', () => {
     expect(request.userId).toBe('u1')
   })
 
-  it('токен без версии считается версией 0', async () => {
-    const { guard, context } = setup({ sub: 'u1' }, 0)
-    await expect(guard.canActivate(context)).resolves.toBe(true)
-  })
-
   it('401, если версия не совпадает', async () => {
     const { guard, context } = setup({ sub: 'u1', ver: 0 }, 1)
     await expect(guard.canActivate(context)).rejects.toBeInstanceOf(UnauthorizedException)
@@ -53,6 +48,7 @@ describe('JwtAuthGuard', () => {
     ['sub не строка', { sub: 123, ver: 0 }],
     ['sub отсутствует', { ver: 0 }],
     ['sub пустой', { sub: '', ver: 0 }],
+    ['ver отсутствует', { sub: 'u1' }],
     ['ver не число', { sub: 'u1', ver: '0' }],
     ['ver дробный', { sub: 'u1', ver: 1.5 }],
     ['ver null', { sub: 'u1', ver: null }],

@@ -1,5 +1,6 @@
 import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto'
 import { promisify } from 'node:util'
+import { ServiceUnavailableException } from '@nestjs/common'
 
 type ScryptParams = { N: number; r: number; p: number }
 
@@ -20,11 +21,47 @@ const MAX_MEM_FACTOR = 2
 
 type Parsed = { params: ScryptParams; salt: Buffer; key: Buffer; legacy: boolean }
 
+// scrypt при N=2^17, r=8 занимает ~128 МиБ и выполняется в общем пуле libuv (по умолчанию 4 потока,
+// их же используют fs и другие задачи). Число одновременных вычислений ограничено, лишние ждут в
+// очереди ограниченной длины, а при её переполнении запрос получает 503. Пиковая память на хеши —
+// `SCRYPT_CONCURRENCY` × ~128 МиБ (по умолчанию 2 → ~256 МиБ); `UV_THREADPOOL_SIZE` лучше держать
+// больше этого значения, чтобы scrypt не занимал все потоки.
+const positiveInt = (value: string | undefined, fallback: number) => {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+const MAX_CONCURRENT = positiveInt(process.env.SCRYPT_CONCURRENCY, 2)
+const MAX_QUEUED = positiveInt(process.env.SCRYPT_QUEUE_LIMIT, 32)
+
+let running = 0
+const waiting: Array<() => void> = []
+
+async function withSlot<T>(task: () => Promise<T>): Promise<T> {
+  if (running >= MAX_CONCURRENT) {
+    if (waiting.length >= MAX_QUEUED) {
+      throw new ServiceUnavailableException('Сервер перегружен, повторите попытку позже')
+    }
+    // слот передаётся ожидающему напрямую (running не уменьшается), чтобы очередь не обгоняли
+    await new Promise<void>((resolve) => waiting.push(resolve))
+  } else {
+    running += 1
+  }
+  try {
+    return await task()
+  } finally {
+    const next = waiting.shift()
+    if (next) next()
+    else running -= 1
+  }
+}
+
 function derive(password: string, salt: Buffer, keyLength: number, params: ScryptParams) {
-  return scryptAsync(password, salt, keyLength, {
-    ...params,
-    maxmem: 128 * params.N * params.r * MAX_MEM_FACTOR,
-  })
+  return withSlot(() =>
+    scryptAsync(password, salt, keyLength, {
+      ...params,
+      maxmem: 128 * params.N * params.r * MAX_MEM_FACTOR,
+    }),
+  )
 }
 
 const isHex = (value: string) =>
@@ -75,8 +112,17 @@ export async function verifyPassword(password: string, stored: string): Promise<
   const parsed = parse(stored)
   if (!parsed) return false
   const actual = await derive(password, parsed.salt, parsed.key.length, parsed.params)
-  return timingSafeEqual(actual, parsed.key)
+  const matches = timingSafeEqual(actual, parsed.key)
+  // Хеш со слабыми параметрами считается быстрее `DUMMY_HASH` (его проверка идёт на текущих
+  // параметрах), и по времени ответа на неверный пароль отличался бы существующий аккаунт от
+  // несуществующего. Добираем недостающую работу; при успехе хеш сразу перехешируется.
+  if (!matches && isWeaker(parsed.params)) {
+    await derive(password, parsed.salt, parsed.key.length, CURRENT)
+  }
+  return matches
 }
+
+const isWeaker = ({ N, r, p }: ScryptParams) => N < CURRENT.N || r < CURRENT.r || p < CURRENT.p
 
 // Параметры хеша при проверке не выше текущих (иначе parse вернёт null): так запись в БД не
 // заставит процесс выделить гигабайты. Нераспознанный хеш считается устаревшим — вызывать

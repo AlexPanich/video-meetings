@@ -30,7 +30,7 @@ import {
   ApiUnauthorizedResponse,
   ApiUnsupportedMediaTypeResponse,
 } from '@nestjs/swagger'
-import { ThrottlerGuard } from '@nestjs/throttler'
+import { AppThrottlerGuard } from '../rate-limit/throttler.guard.js'
 import { type AuthenticatedRequest, JwtAuthGuard } from '../auth/jwt-auth.guard.js'
 import { DeleteAvatarCommand } from './commands/delete-avatar.command.js'
 import { GetAvatarQuery } from './queries/get-avatar.query.js'
@@ -71,7 +71,7 @@ export class ProfileController {
   }
 
   @Put('password')
-  @UseGuards(ThrottlerGuard)
+  @UseGuards(AppThrottlerGuard)
   @ApiTooManyRequestsResponse({ description: 'Превышен лимит попыток смены пароля' })
   @ApiOperation({
     summary: 'Сменить свой пароль',

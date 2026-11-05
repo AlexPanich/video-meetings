@@ -1,6 +1,9 @@
 import { Transform } from 'class-transformer'
 import { IsEmail, IsNotEmpty, IsString, MaxLength, MinLength } from 'class-validator'
-import { EMAIL_MAX_LENGTH, IsUserName } from '../users/user-name.js'
+import { IsUserName } from '../users/user-name.js'
+
+// Максимальная длина email (RFC 5321)
+export const EMAIL_MAX_LENGTH = 254
 
 // Максимальная длина нового пароля: при регистрации и смене одинаковая, иначе пароль нельзя сменить
 export const PASSWORD_MAX_LENGTH = 128

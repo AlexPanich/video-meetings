@@ -34,6 +34,13 @@ describe('validateName', () => {
     expect(validateName('a\nb')).toBe('Имя содержит недопустимые символы')
   })
 
+  it.each([['abc\u202Egnp.exe'], ['Alice\u2066'], ['Alice\u2069'], ['Alice\u200E']])(
+    'отклоняет bidi-символы: %j',
+    (value) => {
+      expect(validateName(value)).toBe('Имя содержит недопустимые символы')
+    },
+  )
+
   it.each([['​'], ['​‍⁠'], ['...'], ['🙂']])('отклоняет имя без буквы и цифры: %j', (value) => {
     expect(validateName(value)).toBe('Имя должно содержать букву или цифру')
   })
