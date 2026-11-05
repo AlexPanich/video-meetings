@@ -6,6 +6,7 @@ export default defineConfig({
     globals: true,
     root: './',
     include: ['**/*.e2e-spec.ts'],
-    env: { JWT_SECRET: 'e2e-test-secret' },
+    // высокий лимит, чтобы остальные e2e не упирались в rate limiting (его проверяет rate-limit.e2e-spec.ts)
+    env: { JWT_SECRET: 'e2e-test-secret', AUTH_RATE_LIMIT: '100000' },
   },
 })

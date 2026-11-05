@@ -1,6 +1,7 @@
 import { Body, Controller, Get, HttpCode, Post, Req, UseGuards } from '@nestjs/common'
 import { CommandBus, QueryBus } from '@nestjs/cqrs'
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
+import { ApiBearerAuth, ApiTags, ApiTooManyRequestsResponse } from '@nestjs/swagger'
+import { ThrottlerGuard } from '@nestjs/throttler'
 import { LoginUserCommand } from './commands/login-user.command.js'
 import { RegisterUserCommand } from './commands/register-user.command.js'
 import { LoginDto, RegisterDto } from './dto.js'
@@ -16,12 +17,16 @@ export class AuthController {
   ) {}
 
   @Post('register')
+  @UseGuards(ThrottlerGuard)
+  @ApiTooManyRequestsResponse({ description: 'Превышен лимит запросов (по IP и по email)' })
   register(@Body() { email, password, name }: RegisterDto) {
     return this.commandBus.execute(new RegisterUserCommand(email, password, name))
   }
 
   @Post('login')
   @HttpCode(200)
+  @UseGuards(ThrottlerGuard)
+  @ApiTooManyRequestsResponse({ description: 'Превышен лимит запросов (по IP и по email)' })
   login(@Body() { email, password }: LoginDto) {
     return this.commandBus.execute(new LoginUserCommand(email, password))
   }
