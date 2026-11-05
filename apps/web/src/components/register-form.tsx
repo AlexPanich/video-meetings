@@ -4,6 +4,7 @@ import { Alert, Button, FieldError, Form, Input, Label, Spinner, TextField } fro
 import { useRouter } from 'next/navigation'
 import { type SyntheticEvent, useState } from 'react'
 import { register } from '@/lib/api'
+import { validateName } from '@/lib/profile-name'
 import { PasswordField } from './password-field'
 
 const MIN_PASSWORD_LENGTH = 8
@@ -18,14 +19,16 @@ export function RegisterForm() {
     event.preventDefault()
     const form = event.currentTarget
     const data = new FormData(form)
+    const name = String(data.get('name')).trim()
+    const nameError = validateName(name)
+    if (nameError) {
+      setError(nameError)
+      return
+    }
     setError(null)
     setPending(true)
     try {
-      await register(
-        String(data.get('name')).trim(),
-        String(data.get('email')),
-        String(data.get('password')),
-      )
+      await register(name, String(data.get('email')), String(data.get('password')))
       // Next сохраняет состояние ушедшей страницы — очищаем, чтобы форма не вернулась заполненной
       form.reset()
       setPassword('')

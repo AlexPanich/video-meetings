@@ -1,12 +1,13 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call -- тела ответов supertest не типизированы */
-import { createHmac, randomUUID } from 'node:crypto'
+import { createHmac, randomBytes, randomUUID, scryptSync } from 'node:crypto'
 import { Test, TestingModule } from '@nestjs/testing'
 import { INestApplication } from '@nestjs/common'
 import request from 'supertest'
 import { App } from 'supertest/types.js'
 import { AppModule } from './../src/app.module.js'
+import { PrismaService } from './../src/prisma/prisma.service.js'
 
-const JWT_SECRET = 'e2e-test-secret'
+const JWT_SECRET = 'e2e-test-secret-at-least-32-bytes-long'
 const PASSWORD = 'Str0ngPassw0rd!'
 
 const base64url = (value: object | Buffer) =>
@@ -127,8 +128,44 @@ describe('Auth (e2e)', () => {
       ],
       ['имя отсутствует', { email: 'a@example.com', password: PASSWORD }],
       ['имя пустое', { email: 'a@example.com', password: PASSWORD, name: '' }],
+      ['имя из пробелов', { email: 'a@example.com', password: PASSWORD, name: '   ' }],
+      ['имя с нулевым символом', { email: 'a@example.com', password: PASSWORD, name: 'a\u0000b' }],
+      ['имя с управляющим символом', { email: 'a@example.com', password: PASSWORD, name: 'a\nb' }],
+      ['имя из zero-width символов', { email: 'a@example.com', password: PASSWORD, name: '​‍' }],
+      ['имя без букв и цифр', { email: 'a@example.com', password: PASSWORD, name: '...' }],
+      [
+        'имя длиннее 100 символов',
+        { email: 'a@example.com', password: PASSWORD, name: 'я'.repeat(101) },
+      ],
+      ['имя не строка', { email: 'a@example.com', password: PASSWORD, name: 123 }],
+      [
+        'email длиннее 254 символов',
+        {
+          email: `a@${['b', 'c', 'd', 'e'].map((c) => c.repeat(63)).join('.')}.com`,
+          password: PASSWORD,
+          name: 'Alice',
+        },
+      ],
     ])('возвращает 400, если %s', async (_title, body) => {
       await register(body).expect(400)
+    })
+
+    it('обрезает пробелы вокруг имени при регистрации', async () => {
+      const res = await register({
+        email: uniqueEmail(),
+        password: PASSWORD,
+        name: '  Alice  ',
+      }).expect(201)
+
+      expect(res.body.user.name).toBe('Alice')
+    })
+
+    it('принимает имя ровно из 100 символов', async () => {
+      await register({
+        email: uniqueEmail(),
+        password: PASSWORD,
+        name: 'я'.repeat(100),
+      }).expect(201)
     })
   })
 
@@ -174,6 +211,28 @@ describe('Auth (e2e)', () => {
       const unknownUser = await login({ email: uniqueEmail(), password: PASSWORD }).expect(401)
 
       expect(unknownUser.body.message).toBe(wrongPassword.body.message)
+    })
+
+    it('входит со старым хешем salt:key и перехеширует его, не сбрасывая сессии', async () => {
+      const legacyEmail = uniqueEmail()
+      const salt = randomBytes(16)
+      const legacyHash = `${salt.toString('hex')}:${scryptSync(PASSWORD, salt, 64).toString('hex')}`
+      const prisma = app.get(PrismaService)
+      await prisma.user.create({
+        data: { email: legacyEmail, name: 'Legacy', passwordHash: legacyHash },
+      })
+
+      const res = await login({ email: legacyEmail, password: PASSWORD }).expect(200)
+
+      const stored = await prisma.user.findUniqueOrThrow({ where: { email: legacyEmail } })
+      expect(stored.passwordHash).toMatch(/^scrypt\$131072\$8\$1\$/)
+      expect(stored.tokenVersion).toBe(0)
+      await http()
+        .get('/auth/me')
+        .set('Authorization', `Bearer ${res.body.accessToken}`)
+        .expect(200)
+      await login({ email: legacyEmail, password: PASSWORD }).expect(200)
+      await login({ email: legacyEmail, password: 'wrong-password' }).expect(401)
     })
 
     it.each([
@@ -273,6 +332,70 @@ describe('Auth (e2e)', () => {
       })}.`
 
       await http().get('/auth/me').set('Authorization', `Bearer ${unsigned}`).expect(401)
+    })
+
+    it('выданный токен содержит iss и aud', async () => {
+      const { body } = await register({
+        email: uniqueEmail(),
+        password: PASSWORD,
+        name: 'Alice',
+      }).expect(201)
+
+      expect(decodeJwt(body.accessToken).payload).toMatchObject({
+        iss: 'video-meetings-api',
+        aud: 'video-meetings',
+      })
+    })
+
+    it('возвращает 401 для токена с чужими iss/aud, подписанного верным секретом', async () => {
+      const { body } = await register({
+        email: uniqueEmail(),
+        password: PASSWORD,
+        name: 'Alice',
+      }).expect(201)
+      const now = Math.floor(Date.now() / 1000)
+      const base = { sub: body.user.id, ver: 0, iat: now, exp: now + 3600 }
+      const good = { iss: 'video-meetings-api', aud: 'video-meetings' }
+      const variants = [
+        base,
+        { ...base, iss: 'other', aud: good.aud },
+        { ...base, iss: good.iss, aud: 'other' },
+        { ...base, iss: good.iss },
+      ]
+
+      for (const payload of variants) {
+        await http()
+          .get('/auth/me')
+          .set('Authorization', `Bearer ${signJwt(payload, JWT_SECRET)}`)
+          .expect(401)
+      }
+      await http()
+        .get('/auth/me')
+        .set('Authorization', `Bearer ${signJwt({ ...base, ...good }, JWT_SECRET)}`)
+        .expect(200)
+    })
+
+    it('возвращает 401, а не 500, если payload подписанного токена кривой', async () => {
+      const now = Math.floor(Date.now() / 1000)
+      const common = {
+        iss: 'video-meetings-api',
+        aud: 'video-meetings',
+        iat: now,
+        exp: now + 3600,
+      }
+      const payloads = [
+        { ...common, sub: 123, ver: 0 },
+        { ...common, ver: 0 },
+        { ...common, sub: randomUUID(), ver: 'x' },
+        { ...common, sub: randomUUID(), ver: 1.5 },
+      ]
+
+      for (const payload of payloads) {
+        await http()
+          .get('/auth/me')
+          .set('Authorization', `Bearer ${signJwt(payload, JWT_SECRET)}`)
+          .expect(401)
+      }
     })
   })
 })

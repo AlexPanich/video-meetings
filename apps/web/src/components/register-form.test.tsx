@@ -13,9 +13,9 @@ beforeEach(() => {
   fetchMock.mockReset()
 })
 
-const fill = async (confirm: string) => {
+const fill = async (confirm: string, name = 'Аня') => {
   const user = userEvent.setup()
-  await user.type(screen.getByLabelText(/Имя/), 'Аня')
+  await user.type(screen.getByLabelText(/Имя/), name)
   await user.type(screen.getByLabelText(/Email/), 'a@b.co')
   await user.type(screen.getByLabelText(/^Пароль/), 'secret123')
   await user.type(screen.getByLabelText(/Подтвердите пароль/), confirm)
@@ -28,6 +28,22 @@ describe('RegisterForm', () => {
     await fill('secret124')
 
     expect(await screen.findByText('Пароли не совпадают')).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('does not submit a name without a letter or digit', async () => {
+    render(<RegisterForm />)
+    await fill('secret123', '!!!')
+
+    expect(await screen.findByText('Имя должно содержать букву или цифру')).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('does not submit a name with bidi control characters', async () => {
+    render(<RegisterForm />)
+    await fill('secret123', 'abc\u202Egnp')
+
+    expect(await screen.findByText('Имя содержит недопустимые символы')).toBeInTheDocument()
     expect(fetchMock).not.toHaveBeenCalled()
   })
 

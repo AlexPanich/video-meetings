@@ -25,11 +25,6 @@ describe('JwtAuthGuard', () => {
     expect(request.userId).toBe('u1')
   })
 
-  it('токен без версии считается версией 0', async () => {
-    const { guard, context } = setup({ sub: 'u1' }, 0)
-    await expect(guard.canActivate(context)).resolves.toBe(true)
-  })
-
   it('401, если версия не совпадает', async () => {
     const { guard, context } = setup({ sub: 'u1', ver: 0 }, 1)
     await expect(guard.canActivate(context)).rejects.toBeInstanceOf(UnauthorizedException)
@@ -47,5 +42,20 @@ describe('JwtAuthGuard', () => {
     await expect(none.guard.canActivate(none.context)).rejects.toBeInstanceOf(UnauthorizedException)
     expect(bad.queryBus.execute).not.toHaveBeenCalled()
     expect(none.queryBus.execute).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['sub не строка', { sub: 123, ver: 0 }],
+    ['sub отсутствует', { ver: 0 }],
+    ['sub пустой', { sub: '', ver: 0 }],
+    ['ver отсутствует', { sub: 'u1' }],
+    ['ver не число', { sub: 'u1', ver: '0' }],
+    ['ver дробный', { sub: 'u1', ver: 1.5 }],
+    ['ver null', { sub: 'u1', ver: null }],
+    ['payload не объект', 'u1'],
+  ])('401 при кривом payload: %s, БД не трогаем', async (_name, payload) => {
+    const { guard, context, queryBus } = setup(payload, 0)
+    await expect(guard.canActivate(context)).rejects.toBeInstanceOf(UnauthorizedException)
+    expect(queryBus.execute).not.toHaveBeenCalled()
   })
 })

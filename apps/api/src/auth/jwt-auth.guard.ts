@@ -8,7 +8,15 @@ export type AuthenticatedRequest = Request & { userId: string }
 
 interface TokenPayload {
   sub: string
-  ver?: number
+  ver: number
+}
+
+function isTokenPayload(payload: unknown): payload is TokenPayload {
+  if (typeof payload !== 'object' || payload === null) return false
+  const { sub, ver } = payload as Record<string, unknown>
+  return (
+    typeof sub === 'string' && sub.length > 0 && typeof ver === 'number' && Number.isInteger(ver)
+  )
 }
 
 @Injectable()
@@ -24,15 +32,18 @@ export class JwtAuthGuard implements CanActivate {
     if (scheme !== 'Bearer' || !token) {
       throw new UnauthorizedException()
     }
-    let payload: TokenPayload
+    let payload: unknown
     try {
-      payload = await this.jwt.verifyAsync<TokenPayload>(token)
+      payload = await this.jwt.verifyAsync<object>(token)
     } catch {
       throw new UnauthorizedException()
     }
+    // подпись верна, но форма payload чужая: 401, а не 500 из запроса к БД
+    if (!isTokenPayload(payload)) {
+      throw new UnauthorizedException()
+    }
     const tokenVersion = await this.queryBus.execute(new GetUserTokenVersionQuery(payload.sub))
-    // токен без версии считается версией 0: действующие сессии не обрываются при выкатке
-    if (tokenVersion === null || tokenVersion !== (payload.ver ?? 0)) {
+    if (tokenVersion === null || tokenVersion !== payload.ver) {
       throw new UnauthorizedException()
     }
     request.userId = payload.sub

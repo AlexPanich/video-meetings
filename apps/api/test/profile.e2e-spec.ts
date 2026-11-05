@@ -25,7 +25,7 @@ describe('Profile (e2e)', () => {
     http().patch('/profile').set('Authorization', `Bearer ${token}`).send(body)
 
   beforeAll(() => {
-    process.env.JWT_SECRET = 'e2e-test-secret'
+    process.env.JWT_SECRET = 'e2e-test-secret-at-least-32-bytes-long'
   })
 
   beforeEach(async () => {

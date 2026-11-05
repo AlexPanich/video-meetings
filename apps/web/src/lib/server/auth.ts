@@ -2,6 +2,7 @@ import { cache } from 'react'
 import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
 import type { User } from '@/lib/api'
+import { clientIpHeaders } from './client-ip'
 
 export const AUTH_COOKIE = 'access-token'
 
@@ -34,7 +35,7 @@ export const authenticate = async (path: string, request: Request): Promise<Next
   try {
     upstream = await fetch(`${apiUrl()}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...clientIpHeaders(request) },
       body: await request.text(),
       cache: 'no-store',
     })
@@ -44,13 +45,38 @@ export const authenticate = async (path: string, request: Request): Promise<Next
 
   const body = await upstream.json().catch(() => null)
   if (!upstream.ok || !body?.accessToken) {
-    return NextResponse.json(body ?? { message: 'Что-то пошло не так' }, {
-      status: upstream.ok ? 502 : upstream.status,
-    })
+    return upstreamError(upstream, body)
   }
   const response = NextResponse.json({ user: body.user })
   setAuthCookie(response, body.accessToken)
   return response
+}
+
+// Ответ с ошибкой API. На 429 `Retry-After` уходит клиенту, а ожидание добавляется в сообщение
+export const upstreamError = (upstream: Response, body: unknown): NextResponse => {
+  const status = upstream.ok ? 502 : upstream.status
+  const payload =
+    body && typeof body === 'object'
+      ? (body as Record<string, unknown>)
+      : { message: 'Что-то пошло не так' }
+  const headers = new Headers()
+  const retryAfter = Number(upstream.headers.get('retry-after'))
+  if (status === 429 && Number.isFinite(retryAfter) && retryAfter > 0) {
+    headers.set('Retry-After', String(Math.ceil(retryAfter)))
+    const message = typeof payload.message === 'string' ? payload.message : 'Слишком много попыток'
+    return NextResponse.json(
+      { ...payload, message: `${message}. Подождите ${formatWait(retryAfter)}` },
+      { status, headers },
+    )
+  }
+  return NextResponse.json(payload, { status, headers })
+}
+
+const formatWait = (seconds: number) => {
+  const total = Math.ceil(seconds)
+  if (total < 60) return `${total} с`
+  if (total < 3600) return `${Math.ceil(total / 60)} мин`
+  return `${Math.ceil(total / 3600)} ч`
 }
 
 export { unavailable }

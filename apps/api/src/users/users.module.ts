@@ -3,8 +3,10 @@ import { CqrsModule } from '@nestjs/cqrs'
 import { ClearUserAvatarHandler } from './commands/clear-user-avatar.handler.js'
 import { ChangeUserPasswordHandler } from './commands/change-user-password.handler.js'
 import { CreateUserHandler } from './commands/create-user.handler.js'
+import { RevokeUserTokensHandler } from './commands/revoke-user-tokens.handler.js'
 import { SetUserAvatarHandler } from './commands/set-user-avatar.handler.js'
 import { UpdateUserNameHandler } from './commands/update-user-name.handler.js'
+import { UpgradeUserPasswordHashHandler } from './commands/upgrade-user-password-hash.handler.js'
 import { FindUserByEmailHandler } from './queries/find-user-by-email.handler.js'
 import { GetUserTokenVersionHandler } from './queries/get-user-token-version.handler.js'
 import { FindUserByIdHandler } from './queries/find-user-by-id.handler.js'
@@ -15,6 +17,8 @@ import { FindUserByIdHandler } from './queries/find-user-by-id.handler.js'
     CreateUserHandler,
     ChangeUserPasswordHandler,
     UpdateUserNameHandler,
+    RevokeUserTokensHandler,
+    UpgradeUserPasswordHashHandler,
     SetUserAvatarHandler,
     ClearUserAvatarHandler,
     FindUserByEmailHandler,

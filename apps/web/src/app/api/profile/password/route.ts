@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server'
-import { apiUrl, AUTH_COOKIE, setAuthCookie, unavailable } from '@/lib/server/auth'
+import { apiUrl, AUTH_COOKIE, setAuthCookie, unavailable, upstreamError } from '@/lib/server/auth'
+import { clientIpHeaders } from '@/lib/server/client-ip'
 
 // Смена пароля: API отзывает все прежние токены и выдаёт новый. Общий прокси `[...path]` cookie
 // не ставит, поэтому текущая сессия оборвалась бы; здесь новый JWT уходит только в HttpOnly-cookie
@@ -13,7 +14,11 @@ export const PUT = async (request: NextRequest) => {
   try {
     const init: RequestInit & { duplex?: 'half' } = {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        ...clientIpHeaders(request),
+      },
       body,
       duplex: body ? 'half' : undefined,
       cache: 'no-store',
@@ -25,9 +30,7 @@ export const PUT = async (request: NextRequest) => {
 
   const result = await upstream.json().catch(() => null)
   if (!upstream.ok || !result?.accessToken) {
-    const response = NextResponse.json(result ?? { message: 'Что-то пошло не так' }, {
-      status: upstream.ok ? 502 : upstream.status,
-    })
+    const response = upstreamError(upstream, result)
     if (upstream.status === 401) response.cookies.delete(AUTH_COOKIE)
     return response
   }

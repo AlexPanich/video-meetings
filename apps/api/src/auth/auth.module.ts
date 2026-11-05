@@ -1,11 +1,13 @@
 import { Module } from '@nestjs/common'
 import { CqrsModule } from '@nestjs/cqrs'
-import { JwtModule, type JwtSignOptions } from '@nestjs/jwt'
+import { JwtModule } from '@nestjs/jwt'
 import { UsersModule } from '../users/users.module.js'
 import { AuthController } from './auth.controller.js'
 import { LoginUserHandler } from './commands/login-user.handler.js'
+import { LogoutUserHandler } from './commands/logout-user.handler.js'
 import { RegisterUserHandler } from './commands/register-user.handler.js'
 import { JwtAuthGuard } from './jwt-auth.guard.js'
+import { resolveJwtConfig } from './jwt-config.js'
 import { GetCurrentUserHandler } from './queries/get-current-user.handler.js'
 import { TokenService } from './token.service.js'
 
@@ -15,15 +17,11 @@ import { TokenService } from './token.service.js'
     UsersModule,
     JwtModule.registerAsync({
       useFactory: () => {
-        const secret = process.env.JWT_SECRET
-        if (!secret) throw new Error('JWT_SECRET не задан')
+        const { secret, expiresInSeconds, issuer, audience } = resolveJwtConfig(process.env)
         return {
           secret,
-          signOptions: {
-            algorithm: 'HS256',
-            expiresIn: (process.env.JWT_EXPIRES_IN ?? '1h') as JwtSignOptions['expiresIn'],
-          },
-          verifyOptions: { algorithms: ['HS256'] },
+          signOptions: { algorithm: 'HS256', expiresIn: expiresInSeconds, issuer, audience },
+          verifyOptions: { algorithms: ['HS256'], issuer, audience },
         }
       },
     }),
@@ -34,6 +32,7 @@ import { TokenService } from './token.service.js'
     TokenService,
     RegisterUserHandler,
     LoginUserHandler,
+    LogoutUserHandler,
     GetCurrentUserHandler,
   ],
   exports: [JwtModule, JwtAuthGuard, TokenService],
