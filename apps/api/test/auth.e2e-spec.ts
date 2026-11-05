@@ -1,10 +1,11 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call -- тела ответов supertest не типизированы */
-import { createHmac, randomUUID } from 'node:crypto'
+import { createHmac, randomBytes, randomUUID, scryptSync } from 'node:crypto'
 import { Test, TestingModule } from '@nestjs/testing'
 import { INestApplication } from '@nestjs/common'
 import request from 'supertest'
 import { App } from 'supertest/types.js'
 import { AppModule } from './../src/app.module.js'
+import { PrismaService } from './../src/prisma/prisma.service.js'
 
 const JWT_SECRET = 'e2e-test-secret'
 const PASSWORD = 'Str0ngPassw0rd!'
@@ -210,6 +211,28 @@ describe('Auth (e2e)', () => {
       const unknownUser = await login({ email: uniqueEmail(), password: PASSWORD }).expect(401)
 
       expect(unknownUser.body.message).toBe(wrongPassword.body.message)
+    })
+
+    it('входит со старым хешем salt:key и перехеширует его, не сбрасывая сессии', async () => {
+      const legacyEmail = uniqueEmail()
+      const salt = randomBytes(16)
+      const legacyHash = `${salt.toString('hex')}:${scryptSync(PASSWORD, salt, 64).toString('hex')}`
+      const prisma = app.get(PrismaService)
+      await prisma.user.create({
+        data: { email: legacyEmail, name: 'Legacy', passwordHash: legacyHash },
+      })
+
+      const res = await login({ email: legacyEmail, password: PASSWORD }).expect(200)
+
+      const stored = await prisma.user.findUniqueOrThrow({ where: { email: legacyEmail } })
+      expect(stored.passwordHash).toMatch(/^scrypt\$131072\$8\$1\$/)
+      expect(stored.tokenVersion).toBe(0)
+      await http()
+        .get('/auth/me')
+        .set('Authorization', `Bearer ${res.body.accessToken}`)
+        .expect(200)
+      await login({ email: legacyEmail, password: PASSWORD }).expect(200)
+      await login({ email: legacyEmail, password: 'wrong-password' }).expect(401)
     })
 
     it.each([
