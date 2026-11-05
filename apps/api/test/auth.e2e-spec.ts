@@ -127,8 +127,44 @@ describe('Auth (e2e)', () => {
       ],
       ['имя отсутствует', { email: 'a@example.com', password: PASSWORD }],
       ['имя пустое', { email: 'a@example.com', password: PASSWORD, name: '' }],
+      ['имя из пробелов', { email: 'a@example.com', password: PASSWORD, name: '   ' }],
+      ['имя с нулевым символом', { email: 'a@example.com', password: PASSWORD, name: 'a\u0000b' }],
+      ['имя с управляющим символом', { email: 'a@example.com', password: PASSWORD, name: 'a\nb' }],
+      ['имя из zero-width символов', { email: 'a@example.com', password: PASSWORD, name: '​‍' }],
+      ['имя без букв и цифр', { email: 'a@example.com', password: PASSWORD, name: '...' }],
+      [
+        'имя длиннее 100 символов',
+        { email: 'a@example.com', password: PASSWORD, name: 'я'.repeat(101) },
+      ],
+      ['имя не строка', { email: 'a@example.com', password: PASSWORD, name: 123 }],
+      [
+        'email длиннее 254 символов',
+        {
+          email: `a@${['b', 'c', 'd', 'e'].map((c) => c.repeat(63)).join('.')}.com`,
+          password: PASSWORD,
+          name: 'Alice',
+        },
+      ],
     ])('возвращает 400, если %s', async (_title, body) => {
       await register(body).expect(400)
+    })
+
+    it('обрезает пробелы вокруг имени при регистрации', async () => {
+      const res = await register({
+        email: uniqueEmail(),
+        password: PASSWORD,
+        name: '  Alice  ',
+      }).expect(201)
+
+      expect(res.body.user.name).toBe('Alice')
+    })
+
+    it('принимает имя ровно из 100 символов', async () => {
+      await register({
+        email: uniqueEmail(),
+        password: PASSWORD,
+        name: 'я'.repeat(100),
+      }).expect(201)
     })
   })
 

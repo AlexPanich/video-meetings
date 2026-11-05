@@ -1,19 +1,9 @@
-import { Transform } from 'class-transformer'
-import { IsNotEmpty, IsString, Matches, MaxLength, MinLength } from 'class-validator'
+import { IsNotEmpty, IsString, MaxLength, MinLength } from 'class-validator'
 import { PASSWORD_MAX_LENGTH } from '../auth/dto.js'
-
-// Максимальная длина имени пользователя (после обрезки пробелов)
-export const NAME_MAX_LENGTH = 100
+import { IsUserName } from '../users/user-name.js'
 
 export class UpdateProfileDto {
-  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(NAME_MAX_LENGTH)
-  // управляющие символы (в том числе нулевой байт, который Postgres не принимает в text)
-  @Matches(/^\P{Cc}*$/u, { message: 'name содержит недопустимые символы' })
-  // невидимые имена (zero-width space и подобные) и имена без букв/цифр дали бы пустые инициалы
-  @Matches(/[\p{L}\p{N}]/u, { message: 'name должно содержать букву или цифру' })
+  @IsUserName()
   name: string
 }
 
