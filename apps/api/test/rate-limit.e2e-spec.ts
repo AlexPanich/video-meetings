@@ -15,7 +15,7 @@ describe('Rate limiting (e2e)', () => {
 
   beforeAll(async () => {
     process.env.AUTH_RATE_LIMIT = '3'
-    process.env.JWT_SECRET = 'e2e-test-secret'
+    process.env.JWT_SECRET = 'e2e-test-secret-at-least-32-bytes-long'
     const moduleFixture = await Test.createTestingModule({ imports: [AppModule] }).compile()
     app = moduleFixture.createNestApplication()
     await app.init()

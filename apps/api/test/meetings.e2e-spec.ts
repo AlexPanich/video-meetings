@@ -6,7 +6,7 @@ import request from 'supertest'
 import { App } from 'supertest/types.js'
 import { AppModule } from './../src/app.module.js'
 
-const JWT_SECRET = 'e2e-test-secret'
+const JWT_SECRET = 'e2e-test-secret-at-least-32-bytes-long'
 const PASSWORD = 'Str0ngPassw0rd!'
 
 const uniqueEmail = () => `user-${randomUUID()}@example.com`

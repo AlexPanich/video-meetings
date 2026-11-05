@@ -40,7 +40,7 @@ describe('Password (e2e)', () => {
   }
 
   beforeAll(() => {
-    process.env.JWT_SECRET = 'e2e-test-secret'
+    process.env.JWT_SECRET = 'e2e-test-secret-at-least-32-bytes-long'
   })
 
   beforeEach(async () => {

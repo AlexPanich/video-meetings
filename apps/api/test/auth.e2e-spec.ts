@@ -7,7 +7,7 @@ import { App } from 'supertest/types.js'
 import { AppModule } from './../src/app.module.js'
 import { PrismaService } from './../src/prisma/prisma.service.js'
 
-const JWT_SECRET = 'e2e-test-secret'
+const JWT_SECRET = 'e2e-test-secret-at-least-32-bytes-long'
 const PASSWORD = 'Str0ngPassw0rd!'
 
 const base64url = (value: object | Buffer) =>
@@ -332,6 +332,70 @@ describe('Auth (e2e)', () => {
       })}.`
 
       await http().get('/auth/me').set('Authorization', `Bearer ${unsigned}`).expect(401)
+    })
+
+    it('выданный токен содержит iss и aud', async () => {
+      const { body } = await register({
+        email: uniqueEmail(),
+        password: PASSWORD,
+        name: 'Alice',
+      }).expect(201)
+
+      expect(decodeJwt(body.accessToken).payload).toMatchObject({
+        iss: 'video-meetings-api',
+        aud: 'video-meetings',
+      })
+    })
+
+    it('возвращает 401 для токена с чужими iss/aud, подписанного верным секретом', async () => {
+      const { body } = await register({
+        email: uniqueEmail(),
+        password: PASSWORD,
+        name: 'Alice',
+      }).expect(201)
+      const now = Math.floor(Date.now() / 1000)
+      const base = { sub: body.user.id, ver: 0, iat: now, exp: now + 3600 }
+      const good = { iss: 'video-meetings-api', aud: 'video-meetings' }
+      const variants = [
+        base,
+        { ...base, iss: 'other', aud: good.aud },
+        { ...base, iss: good.iss, aud: 'other' },
+        { ...base, iss: good.iss },
+      ]
+
+      for (const payload of variants) {
+        await http()
+          .get('/auth/me')
+          .set('Authorization', `Bearer ${signJwt(payload, JWT_SECRET)}`)
+          .expect(401)
+      }
+      await http()
+        .get('/auth/me')
+        .set('Authorization', `Bearer ${signJwt({ ...base, ...good }, JWT_SECRET)}`)
+        .expect(200)
+    })
+
+    it('возвращает 401, а не 500, если payload подписанного токена кривой', async () => {
+      const now = Math.floor(Date.now() / 1000)
+      const common = {
+        iss: 'video-meetings-api',
+        aud: 'video-meetings',
+        iat: now,
+        exp: now + 3600,
+      }
+      const payloads = [
+        { ...common, sub: 123, ver: 0 },
+        { ...common, ver: 0 },
+        { ...common, sub: randomUUID(), ver: 'x' },
+        { ...common, sub: randomUUID(), ver: 1.5 },
+      ]
+
+      for (const payload of payloads) {
+        await http()
+          .get('/auth/me')
+          .set('Authorization', `Bearer ${signJwt(payload, JWT_SECRET)}`)
+          .expect(401)
+      }
     })
   })
 })
