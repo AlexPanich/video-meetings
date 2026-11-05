@@ -3,6 +3,7 @@ import { CommandBus, QueryBus } from '@nestjs/cqrs'
 import { ApiBearerAuth, ApiTags, ApiTooManyRequestsResponse } from '@nestjs/swagger'
 import { ThrottlerGuard } from '@nestjs/throttler'
 import { LoginUserCommand } from './commands/login-user.command.js'
+import { LogoutUserCommand } from './commands/logout-user.command.js'
 import { RegisterUserCommand } from './commands/register-user.command.js'
 import { LoginDto, RegisterDto } from './dto.js'
 import { type AuthenticatedRequest, JwtAuthGuard } from './jwt-auth.guard.js'
@@ -29,6 +30,15 @@ export class AuthController {
   @ApiTooManyRequestsResponse({ description: 'Превышен лимит запросов (по IP и по email)' })
   login(@Body() { email, password }: LoginDto) {
     return this.commandBus.execute(new LoginUserCommand(email, password))
+  }
+
+  // Завершает все сессии пользователя (tokenVersion растёт, прежние токены получают 401)
+  @Post('logout')
+  @HttpCode(204)
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  logout(@Req() req: AuthenticatedRequest) {
+    return this.commandBus.execute(new LogoutUserCommand(req.userId))
   }
 
   @Get('me')

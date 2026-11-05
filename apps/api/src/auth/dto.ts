@@ -5,6 +5,9 @@ import { EMAIL_MAX_LENGTH, IsUserName } from '../users/user-name.js'
 // Максимальная длина нового пароля: при регистрации и смене одинаковая, иначе пароль нельзя сменить
 export const PASSWORD_MAX_LENGTH = 128
 
+// Верхняя граница пароля при входе (как у currentPassword): не даём гнать scrypt по мегабайтам
+export const LOGIN_PASSWORD_MAX_LENGTH = 1024
+
 const normalizeEmail = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim().toLowerCase() : value
 
@@ -16,6 +19,7 @@ export class LoginDto {
 
   @IsString()
   @IsNotEmpty()
+  @MaxLength(LOGIN_PASSWORD_MAX_LENGTH)
   password: string
 }
 

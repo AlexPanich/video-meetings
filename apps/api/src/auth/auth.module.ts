@@ -4,6 +4,7 @@ import { JwtModule } from '@nestjs/jwt'
 import { UsersModule } from '../users/users.module.js'
 import { AuthController } from './auth.controller.js'
 import { LoginUserHandler } from './commands/login-user.handler.js'
+import { LogoutUserHandler } from './commands/logout-user.handler.js'
 import { RegisterUserHandler } from './commands/register-user.handler.js'
 import { JwtAuthGuard } from './jwt-auth.guard.js'
 import { resolveJwtConfig } from './jwt-config.js'
@@ -31,6 +32,7 @@ import { TokenService } from './token.service.js'
     TokenService,
     RegisterUserHandler,
     LoginUserHandler,
+    LogoutUserHandler,
     GetCurrentUserHandler,
   ],
   exports: [JwtModule, JwtAuthGuard, TokenService],
