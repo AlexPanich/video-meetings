@@ -22,7 +22,7 @@
 
 ## Фазы реализации
 
-### Фаза 1: Tracer Bullet — `query()` с простым ответом через Ollama и фасад по `LLM_PROVIDER`
+### Фаза 1: Tracer Bullet — query() с простым ответом через Ollama и фасад по LLM_PROVIDER
 
 **Цель:** Минимальный путь: код фичи вызывает `query({ prompt, options })` из фасада и получает ответ Qwen с машины в LAN. При `LLM_PROVIDER=anthropic` тот же код идёт в Claude Agent SDK.
 **Затрагивает:** backend (новые пакеты `packages/llm-sdk`, `packages/llm`)
