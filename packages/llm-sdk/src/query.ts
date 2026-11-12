@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { readOllamaConfig } from './config.js'
+import { ContextBudget } from './context.js'
 import type { OllamaConfig } from './config.js'
 import { chat, OllamaAbortedError } from './ollama.js'
 import type { OllamaChatResponse, OllamaMessage, OllamaTool, OllamaToolCall } from './ollama.js'
@@ -67,7 +68,9 @@ interface Session {
   model: string
   options: Options
   state: QueryState
+  /** Полная история; в запрос уходит её версия, усечённая `context`. */
   history: OllamaMessage[]
+  context: ContextBudget
   tools: Map<string, RegisteredTool>
   ollamaTools: OllamaTool[]
 }
@@ -91,6 +94,7 @@ async function* run(
     options,
     state,
     history: [],
+    context: new ContextBudget(config.numCtx),
     tools: new Map(tools.map((registered) => [registered.name, registered])),
     ollamaTools: tools.map((registered) => ({
       type: 'function',
@@ -194,11 +198,12 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
 
   while (true) {
     const requestStartedAt = performance.now()
+    const messages = session.context.fit(session.history, session.ollamaTools)
     let response: OllamaChatResponse
     try {
       response = await chat(config, {
         model: session.model,
-        messages: session.history,
+        messages,
         tools: session.ollamaTools,
         signal: state.controller.signal,
       })
@@ -206,6 +211,7 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
       if (error instanceof OllamaAbortedError) return false
       throw error
     }
+    session.context.calibrate(messages, session.ollamaTools, response.prompt_eval_count)
     apiMs += performance.now() - requestStartedAt
     turns += 1
 
