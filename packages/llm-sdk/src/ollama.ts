@@ -1,14 +1,25 @@
 import type { OllamaConfig } from './config.js'
 
-export interface OllamaMessage {
-  role: 'system' | 'user' | 'assistant'
-  content: string
+/** Вызов инструмента в сообщении модели. `arguments` — объект (иногда модель отдаёт строку JSON). */
+export interface OllamaToolCall {
+  function: { name: string; arguments: Record<string, unknown> | string }
+}
+
+export type OllamaMessage =
+  | { role: 'system' | 'user'; content: string }
+  | { role: 'assistant'; content: string; tool_calls?: OllamaToolCall[] }
+  | { role: 'tool'; content: string; tool_name: string }
+
+/** Описание инструмента для tool calling (`tools` в `POST /api/chat`). */
+export interface OllamaTool {
+  type: 'function'
+  function: { name: string; description: string; parameters: Record<string, unknown> }
 }
 
 /** Ответ `POST /api/chat` без стриминга (используемые поля). */
 export interface OllamaChatResponse {
   model: string
-  message: { role: string; content: string; thinking?: string }
+  message: { role: string; content: string; thinking?: string; tool_calls?: OllamaToolCall[] }
   done: boolean
   done_reason?: string
   prompt_eval_count?: number
@@ -18,6 +29,8 @@ export interface OllamaChatResponse {
 export interface ChatRequest {
   model: string
   messages: OllamaMessage[]
+  /** Без инструментов поле `tools` в запрос не попадает. */
+  tools?: OllamaTool[]
   /** Внешняя отмена (`interrupt()`); таймаут из конфига добавляется сам. */
   signal?: AbortSignal
 }
@@ -45,6 +58,7 @@ export async function chat(
       body: JSON.stringify({
         model: request.model,
         messages: request.messages,
+        ...(request.tools?.length ? { tools: request.tools } : {}),
         stream: false,
         // Рассуждение Qwen3 занимает сотни токенов на ход и вытесняет контекст, а ответ не улучшает
         // ни для коротких ответов, ни для tool calling.
@@ -83,9 +97,25 @@ function parseChatResponse(text: string): OllamaChatResponse {
   } catch {
     throw unexpected()
   }
-  const message = (body as { message?: { content?: unknown } } | null)?.message
+  const message = (body as { message?: { content?: unknown; tool_calls?: unknown } } | null)
+    ?.message
   if (typeof message?.content !== 'string') throw unexpected()
+  if (message.tool_calls !== undefined && !isToolCallList(message.tool_calls)) throw unexpected()
   return body as OllamaChatResponse
+}
+
+function isToolCallList(value: unknown): value is OllamaToolCall[] {
+  return (
+    Array.isArray(value) &&
+    value.every((call: unknown) => {
+      const fn = (call as { function?: { name?: unknown; arguments?: unknown } } | null)?.function
+      return (
+        typeof fn?.name === 'string' &&
+        (typeof fn.arguments === 'string' ||
+          (typeof fn.arguments === 'object' && fn.arguments !== null))
+      )
+    })
+  )
 }
 
 /** HTTP-ошибка: в тексте — сообщение Ollama из `{ error }`, чужое тело (прокси) — только в cause. */

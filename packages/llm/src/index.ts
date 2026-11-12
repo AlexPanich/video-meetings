@@ -5,20 +5,33 @@
 import type * as LocalSdk from '@video-meetings/llm-sdk'
 
 export type {
+  CallToolResult,
+  CanUseTool,
   ContentBlock,
+  HookCallback,
+  HookCallbackMatcher,
+  HookEvent,
+  HookInput,
+  HookJSONOutput,
+  McpSdkServerConfigWithInstance,
+  McpServerConfig,
   OtherContentBlock,
   Options,
   PermissionMode,
+  PermissionResult,
   Query,
   SDKAssistantMessage,
   SDKControlInterruptResponse,
   SDKMessage,
+  SDKPermissionDenial,
   SDKResultError,
   SDKResultMessage,
   SDKResultSuccess,
   SDKSystemMessage,
   SDKUserMessage,
+  SdkMcpToolDefinition,
   TextBlock,
+  ToolUseBlock,
 } from '@video-meetings/llm-sdk'
 
 export type LlmProvider = 'local' | 'anthropic'
@@ -33,6 +46,8 @@ export function resolveProvider(value: string | undefined): LlmProvider {
 /** Набор функций, общий для обеих реализаций. Типы — локального SDK, они повторяют оригинал. */
 interface Sdk {
   query: typeof LocalSdk.query
+  tool: typeof LocalSdk.tool
+  createSdkMcpServer: typeof LocalSdk.createSdkMcpServer
 }
 
 async function loadSdk(provider: LlmProvider): Promise<Sdk> {
@@ -49,3 +64,5 @@ export const provider: LlmProvider = resolveProvider(process.env.LLM_PROVIDER)
 const sdk = await loadSdk(provider)
 
 export const query = sdk.query
+export const tool = sdk.tool
+export const createSdkMcpServer = sdk.createSdkMcpServer

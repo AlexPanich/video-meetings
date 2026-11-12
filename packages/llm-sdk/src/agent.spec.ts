@@ -70,7 +70,7 @@ function jsonResponse(body: unknown, status = 200) {
  */
 function scriptedOllama(...replies: unknown[]) {
   let index = 0
-  const fetchMock = vi.fn((..._args: FetchArgs) => {
+  const fetchMock = vi.fn<(...args: FetchArgs) => Promise<Response>>(() => {
     const reply = replies[Math.min(index, replies.length - 1)]
     index += 1
     return Promise.resolve(jsonResponse(reply))
