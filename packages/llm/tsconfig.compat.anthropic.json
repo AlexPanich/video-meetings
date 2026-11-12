@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.compat.base.json",
+  "compilerOptions": {
+    "paths": {
+      "@video-meetings/llm": ["./node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts"]
+    }
+  }
+}
