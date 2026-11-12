@@ -1,10 +1,14 @@
 // Хуки `options.hooks`: выбор по matcher и последовательный вызов.
+import { untilAborted } from './abort.js'
 import type { HookCallbackMatcher, HookEvent, HookInput, HookJSONOutput, Options } from './types.js'
 
 /**
  * Вызывает хуки события, чей matcher подходит к `matchValue` (имя инструмента, `source` или
- * `reason`), по порядку объявления. Исключение хука не роняет сессию: хук пропускается, как
- * `onFailure: 'continue'` по умолчанию в оригинале.
+ * `reason`), по порядку объявления. Исключение хука не роняет сессию. Сбой `PreToolUse`
+ * считается отказом (`deny`): охранный хук — часто единственная защита при
+ * `bypassPermissions`, и его сбой не должен пропускать вызов. Сбой остальных событий —
+ * хук пропускается (как `onFailure: 'continue'` в оригинале). О любом сбое — `process.emitWarning`.
+ * После `interrupt()` хук, который не слушает `signal`, не ждём.
  */
 export async function runHooks(
   hooks: Options['hooks'],
@@ -19,13 +23,35 @@ export async function runHooks(
     if (!matches(matcher, matchValue)) continue
     for (const hook of matcher.hooks) {
       try {
-        outputs.push(await hook(input, toolUseID, { signal }))
-      } catch {
-        // Как в оригинале по умолчанию: сбой хука не блокирует действие.
+        outputs.push(
+          await untilAborted(Promise.resolve(hook(input, toolUseID, { signal })), signal),
+        )
+      } catch (error) {
+        // После interrupt() результат уже не нужен: сессия завершается, предупреждать не о чем.
+        const reason = signal.aborted ? 'interrupted' : errorText(error)
+        if (!signal.aborted) {
+          process.emitWarning(`${event} hook failed: ${reason}`, { code: 'LLM_SDK_HOOK_FAILED' })
+        }
+        if (event === 'PreToolUse') outputs.push(failedPreToolUse(reason))
+        if (signal.aborted) return outputs
       }
     }
   }
   return outputs
+}
+
+function failedPreToolUse(reason: string): HookJSONOutput {
+  return {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: `PreToolUse hook failed: ${reason}`,
+    },
+  }
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 /**

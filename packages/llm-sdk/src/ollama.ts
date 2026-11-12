@@ -31,6 +31,11 @@ export interface ChatRequest {
   messages: OllamaMessage[]
   /** Без инструментов поле `tools` в запрос не попадает. */
   tools?: OllamaTool[]
+  /**
+   * `options.num_predict`: предел длины ответа. Без него ответ не ограничен, и Ollama при выходе
+   * за `num_ctx` молча сдвигает окно, отбрасывая начало входа.
+   */
+  numPredict?: number
   /** Внешняя отмена (`interrupt()`); таймаут из конфига добавляется сам. */
   signal?: AbortSignal
 }
@@ -63,7 +68,10 @@ export async function chat(
         // Рассуждение Qwen3 занимает сотни токенов на ход и вытесняет контекст, а ответ не улучшает
         // ни для коротких ответов, ни для tool calling.
         think: false,
-        options: { num_ctx: config.numCtx },
+        options: {
+          num_ctx: config.numCtx,
+          ...(request.numPredict !== undefined ? { num_predict: request.numPredict } : {}),
+        },
       }),
       signal,
     })

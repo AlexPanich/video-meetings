@@ -1,4 +1,5 @@
 // Права на вызов SDK-инструмента: хуки PreToolUse, permissionMode, allowedTools и canUseTool.
+import { untilAborted } from './abort.js'
 import type { RegisteredTool } from './tools.js'
 import type { HookJSONOutput, Options, PermissionMode } from './types.js'
 
@@ -22,7 +23,8 @@ export interface PermissionContext {
 /**
  * Решение по вызову. `disallowedTools` сюда не доходят: такие инструменты не видны модели и
  * вызываются как неизвестные. Порядок:
- * 1. `deny` любого хука `PreToolUse` — отказ с его причиной; `updatedInput` хуков меняет ввод;
+ * 1. `deny` любого хука `PreToolUse` (и его сбой) — отказ с причиной; `updatedInput` хуков меняет
+ *    ввод: все хуки получают исходный ввод, при нескольких `updatedInput` действует последний;
  * 2. `plan` — инструменты не выполняются;
  * 3. `allow` хука, `bypassPermissions` или инструмент из `allowedTools` — выполнить;
  * 4. иначе решает `canUseTool` (кроме `dontAsk`); без него — отказ.
@@ -63,7 +65,10 @@ export async function decidePermission(
   }
   if (permissionMode !== 'dontAsk' && options.canUseTool) {
     try {
-      const result = await options.canUseTool(name, updatedInput, { signal, toolUseID })
+      const result = await untilAborted(
+        options.canUseTool(name, updatedInput, { signal, toolUseID }),
+        signal,
+      )
       return result.behavior === 'allow'
         ? { allowed: true, input: result.updatedInput ?? updatedInput }
         : deny(result.message)

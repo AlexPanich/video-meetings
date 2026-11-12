@@ -2,6 +2,7 @@
 // Транспорт Ollama подменяется мок-`fetch`, сеть не нужна.
 import { z } from 'zod'
 import { createSdkMcpServer, query, tool } from './index.js'
+import type { MockInstance } from 'vitest'
 import type { Options, SDKMessage, SDKUserMessage } from './index.js'
 
 const OLLAMA_URL = 'http://ollama.test:11434'
@@ -1241,5 +1242,166 @@ describe('контроль размера контекста', () => {
     const last = requests(fetchMock).at(-1)
     const toolMessages = last?.messages.filter((m) => m.role === 'tool') ?? []
     expect(toolMessages.map((m) => m.content.length)).toEqual([3000, 3000, 3000])
+  })
+})
+
+describe('ревью фазы 2: сбои хуков, зависшие обработчики, num_predict, переполнение', () => {
+  let emitWarning: MockInstance
+  beforeEach(() => {
+    emitWarning = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined)
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('исключение хука PreToolUse — отказ (fail-closed) даже при bypassPermissions', async () => {
+    scriptedOllama(toolCallReply({ name: ADD, arguments: { a: 1, b: 2 } }), ollamaReply('Нет'))
+    const { server, addHandler } = calcServer()
+    const failing = vi.fn(() => Promise.reject(new Error('db is down')))
+
+    const messages = await collect(
+      query({
+        prompt: 'go',
+        options: {
+          permissionMode: 'bypassPermissions',
+          mcpServers: { calc: server },
+          hooks: { PreToolUse: [{ hooks: [failing] }] },
+        },
+      }),
+    )
+
+    expect(addHandler).not.toHaveBeenCalled()
+    const [result] = toolResults(messages)
+    expect(result.isError).toBe(true)
+    expect(result.text).toContain('PreToolUse hook failed: db is down')
+    expect(lastResult(messages).permission_denials).toHaveLength(1)
+    expect(emitWarning).toHaveBeenCalledWith(
+      expect.stringContaining('PreToolUse hook failed: db is down'),
+      expect.objectContaining({ code: 'LLM_SDK_HOOK_FAILED' }),
+    )
+  })
+
+  it('исключение хука других событий пропускается с предупреждением', async () => {
+    scriptedOllama(ollamaReply('Готово'))
+    const failing = vi.fn(() => Promise.reject(new Error('boom')))
+
+    const messages = await collect(
+      query({ prompt: 'go', options: { hooks: { Stop: [{ hooks: [failing] }] } } }),
+    )
+
+    expect(lastResult(messages).subtype).toBe('success')
+    expect(emitWarning).toHaveBeenCalledWith(
+      'Stop hook failed: boom',
+      expect.objectContaining({ code: 'LLM_SDK_HOOK_FAILED' }),
+    )
+  })
+
+  it('interrupt() завершает сессию, даже если обработчик не слушает signal и не завершается', async () => {
+    scriptedOllama(toolCallReply({ name: 'mcp__slow__hang', arguments: {} }), ollamaReply('?'))
+    const hang = tool('hang', 'Никогда не завершается', {}, () => new Promise<never>(() => {}))
+    const server = createSdkMcpServer({ name: 'slow', version: '1.0.0', tools: [hang] })
+    const q = query({
+      prompt: 'go',
+      options: { permissionMode: 'bypassPermissions', mcpServers: { slow: server } },
+    })
+
+    const types: string[] = []
+    const done = (async () => {
+      for await (const message of q) types.push(message.type)
+    })()
+    await vi.waitFor(() => expect(types).toContain('assistant'))
+    await q.interrupt()
+    await done
+
+    expect(types).toEqual(['system', 'assistant'])
+  })
+
+  it('interrupt() не ждёт зависший canUseTool', async () => {
+    scriptedOllama(toolCallReply({ name: ADD, arguments: { a: 1, b: 2 } }), ollamaReply('?'))
+    const { server, addHandler } = calcServer()
+    const canUseTool = vi.fn(() => new Promise<never>(() => {}))
+    const q = query({ prompt: 'go', options: { mcpServers: { calc: server }, canUseTool } })
+
+    const types: string[] = []
+    const done = (async () => {
+      for await (const message of q) types.push(message.type)
+    })()
+    await vi.waitFor(() => expect(canUseTool).toHaveBeenCalled())
+    await q.interrupt()
+    await done
+
+    expect(types).toEqual(['system', 'assistant'])
+    expect(addHandler).not.toHaveBeenCalled()
+  })
+
+  it('num_predict ограничивает ответ остатком окна; он же — maxOutputTokens в result', async () => {
+    vi.stubEnv('OLLAMA_NUM_CTX', '8192')
+    const fetchMock = scriptedOllama(ollamaReply('Ок'))
+
+    const messages = await collect(query({ prompt: 'Привет' }))
+
+    const body = requestBody(fetchMock.mock.calls[0]) as OllamaRequestBody & {
+      options: { num_ctx: number; num_predict: number }
+    }
+    expect(body.options.num_ctx).toBe(8192)
+    // Запас под ответ — четверть окна; на короткий вход остаётся почти всё окно.
+    expect(body.options.num_predict).toBeGreaterThanOrEqual(2048)
+    expect(body.options.num_predict).toBeLessThan(8192)
+    const usage = Object.values(lastResult(messages).modelUsage)[0]
+    expect(usage.maxOutputTokens).toBe(body.options.num_predict)
+  })
+
+  it('системный промпт больше num_ctx: запрос не уходит, result/error_during_execution', async () => {
+    vi.stubEnv('OLLAMA_NUM_CTX', '2048')
+    const fetchMock = scriptedOllama(ollamaReply('не должно быть'))
+
+    const messages = await collect(
+      query({ prompt: 'go', options: { systemPrompt: 'x'.repeat(20_000) } }),
+    )
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    const result = lastResult(messages)
+    expect(result.subtype).toBe('error_during_execution')
+    expect(result.is_error).toBe(true)
+    expect(result.subtype !== 'success' && result.errors[0]).toMatch(/^Context window exceeded/)
+  })
+
+  it('длинная цепочка: старые обмены схлопываются в пометку, запрос помещается в num_ctx', async () => {
+    const NUM_CTX = 2048
+    vi.stubEnv('OLLAMA_NUM_CTX', String(NUM_CTX))
+    const read = tool('read', 'Читает часть', { part: z.number() }, async ({ part }) => ({
+      content: [{ type: 'text' as const, text: `часть ${part}: ` + 'д'.repeat(200) }],
+    }))
+    const server = createSdkMcpServer({ name: 'docs', version: '1.0.0', tools: [read] })
+    const READ_TOOL = 'mcp__docs__read'
+    const calls = Array.from({ length: 120 }, (_, part) =>
+      toolCallReply({ name: READ_TOOL, arguments: { part } }),
+    )
+    const fetchMock = scriptedOllama(...calls, ollamaReply('Готово'))
+
+    const messages = await collect(
+      query({
+        prompt: 'Прочитай всё',
+        options: { allowedTools: [READ_TOOL], mcpServers: { docs: server } },
+      }),
+    )
+
+    expect(lastResult(messages).subtype).toBe('success')
+    const bodies = requests(fetchMock)
+    expect(bodies).toHaveLength(121)
+    for (const body of bodies) {
+      const chars = body.messages.reduce(
+        (sum, m) => sum + m.content.length + JSON.stringify(m.tool_calls ?? '').length,
+        0,
+      )
+      expect(chars).toBeLessThanOrEqual(NUM_CTX * 4)
+    }
+    const last = bodies[120].messages
+    expect(last[0]).toEqual({ role: 'user', content: 'Прочитай всё' })
+    expect(last[1].content).toMatch(/^\[\d+ earlier tool calls and their results were omitted/)
+    // Последний обмен остаётся целиком.
+    expect(last.at(-1)).toEqual(
+      expect.objectContaining({ role: 'tool', content: `часть 119: ` + 'д'.repeat(200) }),
+    )
   })
 })

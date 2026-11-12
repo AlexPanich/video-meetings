@@ -1,17 +1,18 @@
 import { randomUUID } from 'node:crypto'
 import { readOllamaConfig } from './config.js'
-import { ContextBudget } from './context.js'
-import type { OllamaConfig } from './config.js'
+import { ContextBudget, ContextOverflowError } from './context.js'
 import { chat, OllamaAbortedError } from './ollama.js'
-import type { OllamaChatResponse, OllamaMessage, OllamaTool, OllamaToolCall } from './ollama.js'
+import type { OllamaChatResponse, OllamaTool, OllamaToolCall } from './ollama.js'
 import { runHooks } from './hooks.js'
-import { decidePermission, matchesToolList } from './permissions.js'
+import { matchesToolList } from './permissions.js'
+import { hookBase, isRecord } from './session.js'
+import type { QueryState, Session } from './session.js'
+import { executeTool } from './tool-runner.js'
+import type { ToolOutcome } from './tool-runner.js'
 import { registerTools } from './tools.js'
 import type { RegisteredTool } from './tools.js'
 import type {
   AssistantMessage,
-  BaseHookInput,
-  CallToolResult,
   ContentBlock,
   Options,
   PermissionMode,
@@ -19,6 +20,7 @@ import type {
   SDKControlInterruptResponse,
   SDKMessage,
   SDKPermissionDenial,
+  SDKResultError,
   SDKUserMessage,
   ToolUseBlock,
   Usage,
@@ -56,25 +58,6 @@ export function query({ prompt, options = {} }: QueryParams): Query {
   })
 }
 
-interface QueryState {
-  permissionMode: PermissionMode
-  controller: AbortController
-}
-
-/** Общие данные сессии для агентного цикла. */
-interface Session {
-  id: string
-  config: OllamaConfig
-  model: string
-  options: Options
-  state: QueryState
-  /** Полная история; в запрос уходит её версия, усечённая `context`. */
-  history: OllamaMessage[]
-  context: ContextBudget
-  tools: Map<string, RegisteredTool>
-  ollamaTools: OllamaTool[]
-}
-
 async function* run(
   prompt: QueryParams['prompt'],
   options: Options,
@@ -87,6 +70,14 @@ async function* run(
     )
   }
   const tools = availableTools(options)
+  const ollamaTools: OllamaTool[] = tools.map((registered) => ({
+    type: 'function',
+    function: {
+      name: registered.name,
+      description: registered.description,
+      parameters: registered.parameters,
+    },
+  }))
   const session: Session = {
     id: randomUUID(),
     config,
@@ -94,16 +85,9 @@ async function* run(
     options,
     state,
     history: [],
-    context: new ContextBudget(config.numCtx),
+    context: new ContextBudget(config.numCtx, ollamaTools),
     tools: new Map(tools.map((registered) => [registered.name, registered])),
-    ollamaTools: tools.map((registered) => ({
-      type: 'function',
-      function: {
-        name: registered.name,
-        description: registered.description,
-        parameters: registered.parameters,
-      },
-    })),
+    ollamaTools,
   }
   const systemPrompt = joinSystemPrompt(options.systemPrompt)
   if (systemPrompt) session.history.push({ role: 'system', content: systemPrompt })
@@ -152,16 +136,6 @@ async function* run(
   }
 }
 
-/** Общие поля входа хуков. */
-function hookBase(session: Session): BaseHookInput {
-  return {
-    session_id: session.id,
-    transcript_path: '',
-    cwd: process.cwd(),
-    permission_mode: session.state.permissionMode,
-  }
-}
-
 /** Инструменты SDK-серверов без `disallowedTools`: запрещённые модель не видит. */
 function availableTools(options: Options): RegisteredTool[] {
   return registerTools(options.mcpServers).filter(
@@ -196,22 +170,66 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
   if (state.controller.signal.aborted) return false
   session.history.push({ role: 'user', content: prompt })
 
+  // Для result: модель из последнего ответа и num_predict последнего запроса.
+  let modelName = session.model
+  let maxOutputTokens = session.context.outputReserve
+  const resultBase = (stopReason: string | null) => ({
+    type: 'result' as const,
+    duration_ms: Math.round(performance.now() - startedAt),
+    duration_api_ms: Math.round(apiMs),
+    num_turns: turns,
+    stop_reason: stopReason,
+    total_cost_usd: 0,
+    usage,
+    modelUsage: {
+      [modelName]: {
+        inputTokens: usage.input_tokens,
+        outputTokens: usage.output_tokens,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
+        webSearchRequests: 0,
+        costUSD: 0,
+        contextWindow: config.numCtx,
+        maxOutputTokens,
+      },
+    },
+    permission_denials: denials,
+    uuid: randomUUID(),
+    session_id: session.id,
+  })
+
   while (true) {
     const requestStartedAt = performance.now()
-    const messages = session.context.fit(session.history, session.ollamaTools)
+    let fitted
+    try {
+      fitted = session.context.fit(session.history)
+    } catch (error) {
+      if (!(error instanceof ContextOverflowError)) throw error
+      // Запрос не отправляется: Ollama молча отбросила бы часть входа.
+      const overflow: SDKResultError = {
+        ...resultBase(null),
+        subtype: 'error_during_execution',
+        is_error: true,
+        errors: [error.message],
+      }
+      yield overflow
+      return true
+    }
+    maxOutputTokens = fitted.numPredict
     let response: OllamaChatResponse
     try {
       response = await chat(config, {
         model: session.model,
-        messages,
+        messages: fitted.messages,
         tools: session.ollamaTools,
+        numPredict: fitted.numPredict,
         signal: state.controller.signal,
       })
     } catch (error) {
       if (error instanceof OllamaAbortedError) return false
       throw error
     }
-    session.context.calibrate(messages, session.ollamaTools, response.prompt_eval_count)
+    session.context.calibrate(fitted.messages, response.prompt_eval_count)
     apiMs += performance.now() - requestStartedAt
     turns += 1
 
@@ -228,6 +246,7 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
       text,
       calls.map((call) => call.block),
     )
+    modelName = message.model
     addUsage(usage, message.usage)
     yield {
       type: 'assistant',
@@ -236,31 +255,6 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
       uuid: randomUUID(),
       session_id: session.id,
     }
-
-    const resultBase = () => ({
-      type: 'result' as const,
-      duration_ms: Math.round(performance.now() - startedAt),
-      duration_api_ms: Math.round(apiMs),
-      num_turns: turns,
-      stop_reason: message.stop_reason,
-      total_cost_usd: 0,
-      usage,
-      modelUsage: {
-        [message.model]: {
-          inputTokens: usage.input_tokens,
-          outputTokens: usage.output_tokens,
-          cacheReadInputTokens: 0,
-          cacheCreationInputTokens: 0,
-          webSearchRequests: 0,
-          costUSD: 0,
-          contextWindow: config.numCtx,
-          maxOutputTokens: config.numCtx,
-        },
-      },
-      permission_denials: denials,
-      uuid: randomUUID(),
-      session_id: session.id,
-    })
 
     if (calls.length === 0) {
       await runHooks(
@@ -277,7 +271,12 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
         state.controller.signal,
       )
       if (state.controller.signal.aborted) return false
-      yield { ...resultBase(), subtype: 'success' as const, result: text, is_error: false }
+      yield {
+        ...resultBase(message.stop_reason),
+        subtype: 'success' as const,
+        result: text,
+        is_error: false,
+      }
       return true
     }
 
@@ -315,7 +314,7 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
     const maxTurns = session.options.maxTurns
     if (maxTurns !== undefined && turns >= maxTurns) {
       yield {
-        ...resultBase(),
+        ...resultBase(message.stop_reason),
         subtype: 'error_max_turns' as const,
         is_error: true,
         errors: [`Reached maximum number of turns (${maxTurns})`],
@@ -323,107 +322,6 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
       return true
     }
   }
-}
-
-interface ToolOutcome {
-  /** Текст для модели и для блока `tool_result`. */
-  text: string
-  isError: boolean
-  /** `CallToolResult` обработчика (или описание ошибки) — `tool_use_result` сообщения. */
-  raw: unknown
-}
-
-/**
- * Выполняет вызов: хуки `PreToolUse`, проверка прав, проверка аргументов по схеме, обработчик,
- * хуки `PostToolUse`. Неизвестный инструмент, отказ, неверные аргументы и исключение — ошибка для
- * модели (`is_error`), цикл продолжается. Отказ в правах попадает в `denials`.
- */
-async function executeTool(
-  session: Session,
-  call: ToolUseBlock,
-  denials: SDKPermissionDenial[],
-): Promise<ToolOutcome> {
-  const registered = session.tools.get(call.name)
-  if (!registered) return toolError(`No such tool available: ${call.name}`)
-  const { options, state } = session
-  const signal = state.controller.signal
-  const input = isRecord(call.input) ? call.input : {}
-
-  const hookOutputs = await runHooks(
-    options.hooks,
-    'PreToolUse',
-    {
-      ...hookBase(session),
-      hook_event_name: 'PreToolUse',
-      tool_name: call.name,
-      tool_input: input,
-      tool_use_id: call.id,
-    },
-    call.name,
-    call.id,
-    signal,
-  )
-  const permission = await decidePermission(
-    { options, permissionMode: state.permissionMode, signal },
-    registered,
-    call.id,
-    input,
-    hookOutputs,
-  )
-  if (!permission.allowed) {
-    denials.push({ tool_name: call.name, tool_use_id: call.id, tool_input: input })
-    return toolError(permission.message)
-  }
-
-  const parsed = registered.schema.safeParse(permission.input)
-  if (!parsed.success) {
-    return toolError(`Invalid input for ${call.name}: ${parsed.error.message}`)
-  }
-  let result: CallToolResult
-  try {
-    result = await registered.handler(parsed.data, { signal })
-  } catch (error) {
-    return toolError(`Tool ${call.name} failed: ${errorMessage(error)}`)
-  }
-  // Обработчик без типов (JS, приведение) может вернуть не CallToolResult — это ошибка инструмента.
-  if (!isRecord(result) || !Array.isArray(result.content)) {
-    return toolError(`Tool ${call.name} returned an invalid result: expected { content: [...] }`)
-  }
-  await runHooks(
-    options.hooks,
-    'PostToolUse',
-    {
-      ...hookBase(session),
-      hook_event_name: 'PostToolUse',
-      tool_name: call.name,
-      tool_input: permission.input,
-      tool_response: result,
-      tool_use_id: call.id,
-    },
-    call.name,
-    call.id,
-    signal,
-  )
-  return { text: resultText(result), isError: result.isError === true, raw: result }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function toolError(text: string): ToolOutcome {
-  return { text, isError: true, raw: text }
-}
-
-/** Текст результата MCP: блоки `text` подряд, остальные — пометкой о типе. */
-function resultText(result: CallToolResult): string {
-  return result.content
-    .map((block) => (block.type === 'text' ? block.text : `[${block.type}]`))
-    .join('\n')
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 /** Вызов инструмента из ответа Ollama: блок `tool_use` с новым id и вызов для истории. */
