@@ -5,11 +5,17 @@ import https from 'node:https'
 const anthropic = vi.hoisted(() => ({
   loaded: vi.fn(),
   query: vi.fn(),
+  tool: vi.fn(),
+  createSdkMcpServer: vi.fn(),
 }))
 
 vi.mock('@anthropic-ai/claude-agent-sdk', () => {
   anthropic.loaded()
-  return { query: anthropic.query }
+  return {
+    query: anthropic.query,
+    tool: anthropic.tool,
+    createSdkMcpServer: anthropic.createSdkMcpServer,
+  }
 })
 
 type Facade = typeof import('./index.js')
@@ -25,13 +31,15 @@ beforeEach(() => {
 })
 
 describe('фасад @video-meetings/llm: выбор реализации', () => {
-  it('LLM_PROVIDER=local — query из @video-meetings/llm-sdk', async () => {
+  it('LLM_PROVIDER=local — query, tool, createSdkMcpServer из @video-meetings/llm-sdk', async () => {
     vi.stubEnv('LLM_PROVIDER', 'local')
 
     const facade = await loadFacade()
     const local = await import('@video-meetings/llm-sdk')
 
     expect(facade.query).toBe(local.query)
+    expect(facade.tool).toBe(local.tool)
+    expect(facade.createSdkMcpServer).toBe(local.createSdkMcpServer)
     expect(anthropic.loaded).not.toHaveBeenCalled()
   })
 
@@ -45,12 +53,14 @@ describe('фасад @video-meetings/llm: выбор реализации', () =
     expect(anthropic.loaded).not.toHaveBeenCalled()
   })
 
-  it('LLM_PROVIDER=anthropic — query из @anthropic-ai/claude-agent-sdk', async () => {
+  it('LLM_PROVIDER=anthropic — query, tool, createSdkMcpServer из @anthropic-ai/claude-agent-sdk', async () => {
     vi.stubEnv('LLM_PROVIDER', 'anthropic')
 
     const facade = await loadFacade()
 
     expect(facade.query).toBe(anthropic.query)
+    expect(facade.tool).toBe(anthropic.tool)
+    expect(facade.createSdkMcpServer).toBe(anthropic.createSdkMcpServer)
   })
 
   it('неизвестный LLM_PROVIDER — ошибка с допустимыми значениями', async () => {
