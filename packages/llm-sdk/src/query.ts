@@ -440,9 +440,7 @@ function parseArguments(raw: OllamaToolCall['function']['arguments']): Record<st
   if (typeof raw !== 'string') return raw
   try {
     const value: unknown = JSON.parse(raw)
-    return typeof value === 'object' && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : {}
+    return isRecord(value) ? value : {}
   } catch {
     return {}
   }
