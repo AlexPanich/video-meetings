@@ -48,7 +48,7 @@ function requestBody(args: FetchArgs): {
   options?: { num_ctx?: number }
 } {
   const [, init] = args
-  return JSON.parse(String(init?.body)) as ReturnType<typeof requestBody>
+  return JSON.parse(init?.body as string) as ReturnType<typeof requestBody>
 }
 
 async function collect(iterable: AsyncIterable<SDKMessage>): Promise<SDKMessage[]> {
@@ -261,11 +261,66 @@ describe('query(): ошибки Ollama', () => {
     )
   })
 
+  it('HTTP-ошибка не выдаётся за таймаут, если тело дочитывается после него', async () => {
+    vi.stubEnv('OLLAMA_TIMEOUT_MS', '50')
+    mockOllama(() => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          setTimeout(() => {
+            controller.enqueue(new TextEncoder().encode('{"error":"out of memory"}'))
+            controller.close()
+          }, 100)
+        },
+      })
+      return new Response(body, { status: 500 })
+    })
+
+    await expect(collect(query({ prompt: 'hi' }))).rejects.toThrow(
+      'Ollama responded with 500: out of memory',
+    )
+  }, 2000)
+
+  it('ответ 200 без message — понятная ошибка, а не TypeError', async () => {
+    mockOllama(() => jsonResponse({ done: false }))
+
+    await expect(collect(query({ prompt: 'hi' }))).rejects.toThrow(
+      'Ollama returned an unexpected response',
+    )
+  })
+
+  it('ответ 200 не в JSON — понятная ошибка, а не SyntaxError', async () => {
+    mockOllama(() => new Response('<html>proxy error</html>', { status: 200 }))
+
+    await expect(collect(query({ prompt: 'hi' }))).rejects.toThrow(
+      'Ollama returned an unexpected response',
+    )
+  })
+
+  it('OLLAMA_URL с query или hash — ошибка конфигурации', async () => {
+    vi.stubEnv('OLLAMA_URL', `${OLLAMA_URL}/?token=x`)
+    const fetchMock = mockOllama(() => jsonResponse(ollamaReply('ok')))
+
+    await expect(collect(query({ prompt: 'hi' }))).rejects.toThrow(
+      'OLLAMA_URL must not contain a query or hash',
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('некорректное значение OLLAMA_NUM_CTX — ошибка конфигурации', async () => {
     vi.stubEnv('OLLAMA_NUM_CTX', 'много')
     const fetchMock = mockOllama(() => jsonResponse(ollamaReply('ok')))
 
     await expect(collect(query({ prompt: 'hi' }))).rejects.toThrow(/OLLAMA_NUM_CTX/)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('OLLAMA_URL без схемы — ошибка конфигурации, а не «unreachable»', async () => {
+    vi.stubEnv('OLLAMA_URL', '192.168.100.204:11434')
+    const fetchMock = mockOllama(() => jsonResponse(ollamaReply('ok')))
+
+    await expect(collect(query({ prompt: 'hi' }))).rejects.toThrow(
+      'OLLAMA_URL must be an http(s) URL',
+    )
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
@@ -275,5 +330,73 @@ describe('query(): ошибки Ollama', () => {
 
     await expect(collect(query({ prompt: 'hi' }))).rejects.toThrow(/OLLAMA_TIMEOUT_MS/)
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('query(): рассуждение Qwen3', () => {
+  it('отрезает <think>…</think> в начале ответа', async () => {
+    mockOllama(() => jsonResponse(ollamaReply('<think>\nдумаю\n</think>\n\nПариж')))
+
+    const result = (await collect(query({ prompt: 'hi' }))).at(-1)
+
+    if (result?.type !== 'result' || result.subtype !== 'success') throw new Error('нет success')
+    expect(result.result).toBe('Париж')
+  })
+
+  it('не выдаёт за ответ рассуждение, оборванное без </think>', async () => {
+    mockOllama(() => jsonResponse(ollamaReply('<think>\nдолго думаю', { done_reason: 'length' })))
+
+    const result = (await collect(query({ prompt: 'hi' }))).at(-1)
+
+    if (result?.type !== 'result' || result.subtype !== 'success') throw new Error('нет success')
+    expect(result.result).toBe('')
+    expect(result.stop_reason).toBe('max_tokens')
+  })
+})
+
+describe('query(): interrupt()', () => {
+  it('обрывает запрос к Ollama, генератор завершается без ошибки', async () => {
+    mockOllama(
+      (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason))
+        }),
+    )
+    const q = query({ prompt: 'hi' })
+
+    const first = await q.next()
+    expect(first.value?.type).toBe('system')
+    const pending = q.next()
+    await q.interrupt()
+
+    await expect(pending).resolves.toEqual({ done: true, value: undefined })
+  })
+
+  it('завершает потоковую сессию, ждущую следующего сообщения пользователя', async () => {
+    mockOllama(() => jsonResponse(ollamaReply('ok')))
+    async function* oneThenWait(): AsyncIterable<SDKUserMessage> {
+      yield* userMessages('первое')
+      await new Promise(() => {})
+    }
+    const q = query({ prompt: oneThenWait() })
+
+    const types: string[] = []
+    for await (const message of q) {
+      types.push(message.type)
+      if (message.type === 'result') await q.interrupt()
+    }
+
+    expect(types).toEqual(['system', 'assistant', 'result'])
+  }, 2000)
+
+  it('HTTP-ошибка не теряется, если interrupt() пришёл после ответа', async () => {
+    const session: { q?: ReturnType<typeof query> } = {}
+    mockOllama(async () => {
+      await session.q?.interrupt()
+      return jsonResponse({ error: 'boom' }, 500)
+    })
+    session.q = query({ prompt: 'hi' })
+
+    await expect(collect(session.q)).rejects.toThrow('Ollama responded with 500: boom')
   })
 })

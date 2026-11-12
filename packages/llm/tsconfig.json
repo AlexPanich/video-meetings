@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "ES2023",
+    "strict": true,
+    "isolatedModules": true,
+    "declaration": true,
+    "sourceMap": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    // Исходники @video-meetings/llm-sdk (условие `source` в его exports): тесты и линт
+    // не требуют предварительной сборки. Сборка пакета берёт dist (см. tsconfig.build.json).
+    "customConditions": ["source"],
+    "types": ["vitest/globals", "node"]
+  },
+  "include": ["src", "test", "vitest.config.ts", "vitest.config.contract.ts"]
+}

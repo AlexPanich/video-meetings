@@ -1,8 +1,10 @@
 {
   "extends": "./tsconfig.compat.base.json",
   "compilerOptions": {
+    // Проверяется сам фасад (его экспорты), а он берёт типы llm-sdk из исходников
+    "customConditions": ["source"],
     "paths": {
-      "@video-meetings/llm": ["../llm-sdk/src/index.ts"]
+      "@video-meetings/llm": ["./src/index.ts"]
     }
   }
 }

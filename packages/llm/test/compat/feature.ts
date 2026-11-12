@@ -1,6 +1,6 @@
 // Проверка совместимости типов: «код фичи», который импортирует только фасад.
 // Файл проходит `tsc` дважды (`pnpm --filter @video-meetings/llm typecheck:compat`):
-// - tsconfig.compat.local.json — `@video-meetings/llm` указывает на `@video-meetings/llm-sdk`;
+// - tsconfig.compat.local.json — `@video-meetings/llm` указывает на сам фасад (`src/index.ts`, локальный SDK);
 // - tsconfig.compat.anthropic.json — на `@anthropic-ai/claude-agent-sdk`.
 // Без `any` и приведений типов. Каждая SDK-фаза дописывает сюда свои возможности.
 import { query } from '@video-meetings/llm'
