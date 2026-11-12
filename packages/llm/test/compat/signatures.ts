@@ -25,6 +25,13 @@ export type SetPermissionModeFromAnthropic = Assert<
   Assignable<Anthropic.Query['setPermissionMode'], Local.Query['setPermissionMode']>
 >
 
+// Фасад отдаёт tool и createSdkMcpServer оригинала под локальными типами: функции оригинала должны
+// подходить под локальные объявления.
+export type ToolFromAnthropic = Assert<Assignable<typeof Anthropic.tool, typeof Local.tool>>
+export type CreateSdkMcpServerFromAnthropic = Assert<
+  Assignable<typeof Anthropic.createSdkMcpServer, typeof Local.createSdkMcpServer>
+>
+
 // Сообщение Claude Agent SDK с тем же type подходит под локальный тип: код фичи, написанный по
 // локальным типам, читает только существующие поля. Локальные типы объявляют подмножество полей
 // и вариантов; у оригинала десятки вариантов SDKMessage (stream_event, system/status и др.),
@@ -38,4 +45,7 @@ export type ResultFromAnthropic = Assert<
 >
 export type InitFromAnthropic = Assert<
   Assignable<AnthropicMessage<{ type: 'system'; subtype: 'init' }>, Local.SDKSystemMessage>
+>
+export type UserFromAnthropic = Assert<
+  Assignable<AnthropicMessage<{ type: 'user' }>, Local.SDKUserMessage>
 >
