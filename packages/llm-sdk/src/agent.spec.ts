@@ -491,6 +491,64 @@ describe('агентный цикл', () => {
   })
 })
 
+describe('агентный цикл: устойчивость', () => {
+  it('interrupt() после assistant с tool_use — инструмент не выполняется', async () => {
+    scriptedOllama(toolCallReply({ name: ADD, arguments: { a: 1, b: 2 } }), ollamaReply('3'))
+    const { server, addHandler } = calcServer()
+    const q = query({
+      prompt: 'go',
+      options: { allowedTools: [ADD], mcpServers: { calc: server } },
+    })
+
+    const types: string[] = []
+    for await (const message of q) {
+      types.push(message.type)
+      if (message.type === 'assistant') await q.interrupt()
+    }
+
+    expect(types).toEqual(['system', 'assistant'])
+    expect(addHandler).not.toHaveBeenCalled()
+  })
+
+  it('обработчик вернул не CallToolResult — tool_result с is_error, сессия не падает', async () => {
+    scriptedOllama(toolCallReply({ name: 'mcp__bad__oops', arguments: {} }), ollamaReply('ok'))
+    const oops = tool('oops', 'Возвращает мусор', {}, (async () => undefined) as never)
+    const server = createSdkMcpServer({ name: 'bad', version: '1.0.0', tools: [oops] })
+
+    const messages = await collect(
+      query({ prompt: 'go', options: { allowedTools: ['mcp__bad'], mcpServers: { bad: server } } }),
+    )
+
+    expect(toolResults(messages)[0].isError).toBe(true)
+    expect(lastResult(messages).subtype).toBe('success')
+  })
+
+  it('поле, которое не выражается в JSON Schema, не роняет query()', async () => {
+    const fetchMock = scriptedOllama(ollamaReply('ok'))
+    const when = tool('when', 'Дата', { at: z.date() }, async () => ({ content: [] }))
+    const server = createSdkMcpServer({ name: 'cal', version: '1.0.0', tools: [when] })
+
+    await collect(query({ prompt: 'go', options: { mcpServers: { cal: server } } }))
+
+    const names = (requestBody(fetchMock.mock.calls[0]).tools ?? []).map((t) => t.function.name)
+    expect(names).toEqual(['mcp__cal__when'])
+  })
+
+  it('allowedTools с mcp__<server>__* разрешает все инструменты сервера', async () => {
+    scriptedOllama(toolCallReply({ name: MUL, arguments: { a: 2, b: 3 } }), ollamaReply('6'))
+    const { server, mulHandler } = calcServer()
+
+    await collect(
+      query({
+        prompt: 'go',
+        options: { allowedTools: ['mcp__calc__*'], mcpServers: { calc: server } },
+      }),
+    )
+
+    expect(mulHandler).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('права: allowedTools, disallowedTools, canUseTool', () => {
   it('инструмент из allowedTools выполняется без canUseTool', async () => {
     scriptedOllama(toolCallReply({ name: ADD, arguments: { a: 1, b: 2 } }), ollamaReply('3'))

@@ -3,10 +3,13 @@ import { readOllamaConfig } from './config.js'
 import type { OllamaConfig } from './config.js'
 import { chat, OllamaAbortedError } from './ollama.js'
 import type { OllamaChatResponse, OllamaMessage, OllamaTool, OllamaToolCall } from './ollama.js'
+import { runHooks } from './hooks.js'
+import { decidePermission, matchesToolList } from './permissions.js'
 import { registerTools } from './tools.js'
 import type { RegisteredTool } from './tools.js'
 import type {
   AssistantMessage,
+  BaseHookInput,
   CallToolResult,
   ContentBlock,
   Options,
@@ -116,24 +119,50 @@ async function* run(
     session_id: session.id,
   }
 
-  for await (const userMessage of userTurns(prompt, state.controller.signal)) {
-    if (state.controller.signal.aborted) return
-    const completed = yield* agentLoop(session, textOf(userMessage))
-    if (!completed) return
+  const signal = state.controller.signal
+  try {
+    await runHooks(
+      options.hooks,
+      'SessionStart',
+      { ...hookBase(session), hook_event_name: 'SessionStart', source: 'startup' },
+      'startup',
+      undefined,
+      signal,
+    )
+    for await (const userMessage of userTurns(prompt, signal)) {
+      if (signal.aborted) return
+      const completed = yield* agentLoop(session, textOf(userMessage))
+      if (!completed) return
+    }
+  } finally {
+    // Сессия кончилась: поток сообщений исчерпан, прервана, упала или вызывающий код вышел из цикла.
+    await runHooks(
+      options.hooks,
+      'SessionEnd',
+      { ...hookBase(session), hook_event_name: 'SessionEnd', reason: 'other' },
+      'other',
+      undefined,
+      // После interrupt() signal сессии уже сработал, а хуку завершения нужно успеть доработать.
+      new AbortController().signal,
+    )
+  }
+}
+
+/** Общие поля входа хуков. */
+function hookBase(session: Session): BaseHookInput {
+  return {
+    session_id: session.id,
+    transcript_path: '',
+    cwd: process.cwd(),
+    permission_mode: session.state.permissionMode,
   }
 }
 
 /** Инструменты SDK-серверов без `disallowedTools`: запрещённые модель не видит. */
 function availableTools(options: Options): RegisteredTool[] {
-  const disallowed = options.disallowedTools ?? []
   return registerTools(options.mcpServers).filter(
-    (registered) => !matchesToolList(registered, disallowed),
+    (registered) => !matchesToolList(registered, options.disallowedTools),
   )
-}
-
-/** Имя инструмента или `mcp__<server>` — все инструменты сервера. */
-export function matchesToolList(registered: RegisteredTool, list: string[]): boolean {
-  return list.some((entry) => entry === registered.name || entry === `mcp__${registered.server}`)
 }
 
 /**
@@ -152,6 +181,15 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
     cache_read_input_tokens: 0,
   }
   const denials: SDKPermissionDenial[] = []
+  await runHooks(
+    session.options.hooks,
+    'UserPromptSubmit',
+    { ...hookBase(session), hook_event_name: 'UserPromptSubmit', prompt },
+    undefined,
+    undefined,
+    state.controller.signal,
+  )
+  if (state.controller.signal.aborted) return false
   session.history.push({ role: 'user', content: prompt })
 
   while (true) {
@@ -219,15 +257,31 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
     })
 
     if (calls.length === 0) {
+      await runHooks(
+        session.options.hooks,
+        'Stop',
+        {
+          ...hookBase(session),
+          hook_event_name: 'Stop',
+          stop_hook_active: false,
+          last_assistant_message: text,
+        },
+        undefined,
+        undefined,
+        state.controller.signal,
+      )
+      if (state.controller.signal.aborted) return false
       yield { ...resultBase(), subtype: 'success' as const, result: text, is_error: false }
       return true
     }
 
     const results: ToolOutcome[] = []
     for (const call of calls) {
-      results.push(await executeTool(session, call.block))
+      // interrupt() между сообщениями: инструменты (и их побочные эффекты) уже не выполняются.
       if (state.controller.signal.aborted) return false
+      results.push(await executeTool(session, call.block, denials))
     }
+    if (state.controller.signal.aborted) return false
     for (const [index, outcome] of results.entries()) {
       session.history.push({
         role: 'tool',
@@ -273,23 +327,82 @@ interface ToolOutcome {
   raw: unknown
 }
 
-/** Выполняет вызов: неизвестный инструмент, неверные аргументы и исключение — ошибка для модели. */
-async function executeTool(session: Session, call: ToolUseBlock): Promise<ToolOutcome> {
+/**
+ * Выполняет вызов: хуки `PreToolUse`, проверка прав, проверка аргументов по схеме, обработчик,
+ * хуки `PostToolUse`. Неизвестный инструмент, отказ, неверные аргументы и исключение — ошибка для
+ * модели (`is_error`), цикл продолжается. Отказ в правах попадает в `denials`.
+ */
+async function executeTool(
+  session: Session,
+  call: ToolUseBlock,
+  denials: SDKPermissionDenial[],
+): Promise<ToolOutcome> {
   const registered = session.tools.get(call.name)
   if (!registered) return toolError(`No such tool available: ${call.name}`)
+  const { options, state } = session
+  const signal = state.controller.signal
+  const input = isRecord(call.input) ? call.input : {}
 
-  const parsed = registered.schema.safeParse(call.input)
+  const hookOutputs = await runHooks(
+    options.hooks,
+    'PreToolUse',
+    {
+      ...hookBase(session),
+      hook_event_name: 'PreToolUse',
+      tool_name: call.name,
+      tool_input: input,
+      tool_use_id: call.id,
+    },
+    call.name,
+    call.id,
+    signal,
+  )
+  const permission = await decidePermission(
+    { options, permissionMode: state.permissionMode, signal },
+    registered,
+    call.id,
+    input,
+    hookOutputs,
+  )
+  if (!permission.allowed) {
+    denials.push({ tool_name: call.name, tool_use_id: call.id, tool_input: input })
+    return toolError(permission.message)
+  }
+
+  const parsed = registered.schema.safeParse(permission.input)
   if (!parsed.success) {
     return toolError(`Invalid input for ${call.name}: ${parsed.error.message}`)
   }
+  let result: CallToolResult
   try {
-    const result = await registered.handler(parsed.data, {
-      signal: session.state.controller.signal,
-    })
-    return { text: resultText(result), isError: result.isError === true, raw: result }
+    result = await registered.handler(parsed.data, { signal })
   } catch (error) {
     return toolError(`Tool ${call.name} failed: ${errorMessage(error)}`)
   }
+  // Обработчик без типов (JS, приведение) может вернуть не CallToolResult — это ошибка инструмента.
+  if (!isRecord(result) || !Array.isArray(result.content)) {
+    return toolError(`Tool ${call.name} returned an invalid result: expected { content: [...] }`)
+  }
+  await runHooks(
+    options.hooks,
+    'PostToolUse',
+    {
+      ...hookBase(session),
+      hook_event_name: 'PostToolUse',
+      tool_name: call.name,
+      tool_input: permission.input,
+      tool_response: result,
+      tool_use_id: call.id,
+    },
+    call.name,
+    call.id,
+    signal,
+  )
+  return { text: resultText(result), isError: result.isError === true, raw: result }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function toolError(text: string): ToolOutcome {
