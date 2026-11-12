@@ -1,0 +1,41 @@
+{
+  "name": "@video-meetings/llm",
+  "version": "0.0.1",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "Фасад LLM: @video-meetings/llm-sdk или @anthropic-ai/claude-agent-sdk по LLM_PROVIDER",
+  "type": "module",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "lint": "eslint \"{src,test}/**/*.ts\"",
+    "test": "vitest run && pnpm typecheck:compat",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "typecheck:compat": "tsc -p tsconfig.compat.local.json && tsc -p tsconfig.compat.anthropic.json",
+    "test:contract": "vitest run --config ./vitest.config.contract.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.322",
+    "@video-meetings/llm-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.39.5",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.13.0",
+    "typescript": "^6.0.2",
+    "typescript-eslint": "^8.72.0",
+    "vitest": "^4.1.2"
+  }
+}

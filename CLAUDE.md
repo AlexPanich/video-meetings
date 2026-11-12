@@ -4,12 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-`video-meetings` is a pnpm monorepo (pnpm 10, Node >= 22) with two apps under `apps/*`:
+`video-meetings` is a pnpm monorepo (pnpm 10, Node >= 22) with two apps under `apps/*` and shared packages under `packages/*`:
 
 - `apps/web` — Next.js 16 (App Router, `src/app`), React 19. `next.config.ts` enables `cacheComponents` and `partialPrefetching`. Path alias `@/*` → `src/*`.
 - `apps/api` — NestJS 12 backend, **native ESM** (`"type": "module"`, `module: nodenext`). Relative imports must include the `.js` extension (e.g. `import { AppModule } from './app.module.js'`); `main.ts` uses top-level `await`.
+- `packages/llm-sdk` (`@video-meetings/llm-sdk`) — локальная реализация публичного интерфейса `@anthropic-ai/claude-agent-sdk` поверх Ollama (Qwen3 в LAN). ESM, `tsc` в `dist`. Типы `SDKMessage`/`Query`/`Options` повторяют оригинал; опорная версия оригинала — его `devDependencies` (сейчас `0.3.322`). Пока умеет `query()` с одним ходом на сообщение (`model`, `systemPrompt`), без инструментов. Подробности — `packages/llm-sdk/README.md`.
+- `packages/llm` (`@video-meetings/llm`) — фасад: по `LLM_PROVIDER` (`local` по умолчанию | `anthropic`) реэкспортирует `query` и типы из `llm-sdk` или `@anthropic-ai/claude-agent-sdk`. **Код фич импортирует только фасад.** В режиме `local` модуль Anthropic не загружается. `test/compat/feature.ts` компилируется с обеими реализациями (`typecheck:compat`, входит в `test`); контрактный набор против живой модели — вручную (`packages/llm/README.md`).
 
-Both projects are currently fresh scaffolds — there is no shared package between them yet.
+Пакеты экспортируют `dist` и условие `source` → `src/index.ts`: тесты и линт работают без сборки (`customConditions` в `tsconfig.json`, alias в `vitest.config.ts`), `pnpm build` собирает их по порядку зависимостей. В `apps/*` пакеты пока не подключены.
 
 ## Commands
 
@@ -25,10 +27,11 @@ pnpm test:e2e       # поднимает Postgres, применяет мигра
 pnpm format         # prettier --write . (format:check for CI)
 ```
 
-Per-app commands via `pnpm --filter <web|api> <script>`:
+Per-app commands via `pnpm --filter <web|api|@video-meetings/llm-sdk|@video-meetings/llm> <script>`:
 
 - web: `typecheck` (`next typegen && tsc --noEmit`), `test:watch`
 - api: `test:e2e` (separate config `vitest.config.e2e.ts`, picks up `test/**/*.e2e-spec.ts`), `test:cov`, `test:debug`, `start:debug`
+- llm-sdk, llm: `build`, `lint`, `test`, `typecheck`; llm ещё `typecheck:compat` и `test:contract` (живая модель, только вручную: `LLM_CONTRACT=1 pnpm --filter @video-meetings/llm test:contract`)
 
 Single test file / single test name (Vitest in both apps):
 
@@ -52,11 +55,16 @@ docker compose down           # остановить (-v — удалить да
 
 Модули `auth` (`POST /auth/register`, `POST /auth/login`, `POST /auth/logout` — отзывает все токены пользователя, `GET /auth/me`) и `users` (без HTTP-эндпоинтов; `auth` обращается к нему командами/запросами через шины). Бизнес-логика построена по паттерну CQRS (`@nestjs/cqrs`): контроллер отправляет команды/запросы в `CommandBus`/`QueryBus`, логика — в handlers (`apps/api/src/auth/commands`, `queries`). Правила и раскладка файлов — в разделе «CQRS» файла `apps/api/CLAUDE.md`. JWT (HS256, `@nestjs/jwt`) в `Authorization: Bearer`; пароли хешируются `scrypt` (`node:crypto`, N=2^17, параметры хранятся в хеше, старые хеши обновляются при входе). Env: `JWT_SECRET` (обязателен, ≥ 32 байт, не `change-me`, иначе API не стартует), `JWT_EXPIRES_IN` (по умолчанию `1h`, максимум 24 ч, кривое значение — ошибка старта), `AUTH_RATE_LIMIT`/`AUTH_RATE_LIMIT_TTL_MS` (лимит на `/auth/login`, `/auth/register`, `PUT /profile/password`: по IP, на входе — по неудачным попыткам пары email+IP и нарастающая блокировка по email, иначе 429 с `Retry-After`; по умолчанию 10 в минуту), `TRUST_PROXY` (число прокси перед API; web передаёт API IP клиента в `X-Forwarded-For`, поэтому за BFF ставьте 1 и закройте API от прямого доступа; по умолчанию заголовок не доверяем), `TRUSTED_PROXIES` (web: число обратных прокси перед Next, по ним берётся IP клиента; по умолчанию 0 — IP не передаётся), `SCRYPT_CONCURRENCY`/`SCRYPT_QUEUE_LIMIT` (одновременные scrypt, по умолчанию 2 и 32, переполнение — 503), `SWAGGER_ENABLED` (Swagger выключен, пока не `true`, в production не включается), `DATABASE_URL`, `UPLOADS_DIR` (каталог файлов встреч и аватаров), `MAX_UPLOAD_BYTES` (лимит одного файла, по умолчанию 500 МиБ). Модуль `meetings` (`POST /meetings`, `GET /meetings`, `GET /meetings/:id`, только для авторизованных; пользователь видит лишь свои встречи) устроен так же; модуль `files` (`POST/GET /meetings/:id/files`, `GET …/files/:fileId/download`, `DELETE …/files/:fileId`, загрузка потоком через `busboy` на диск в `UPLOADS_DIR`; `DELETE /meetings/:id` удаляет встречу вместе с файлами) — тоже; модуль `profile` (`PATCH /profile` — изменение своего имени, `{ name }`: не длиннее 100 символов, без управляющих символов, с буквой или цифрой, иначе 400; запись в `User` идёт через команду модуля `users`; читать профиль — `GET /auth/me`; смена пароля — `PUT /profile/password` (`{ currentPassword, newPassword }`, неверный текущий → 403, успех → новый токен как при логине; `User.tokenVersion` растёт, и `JwtAuthGuard` отвечает 401 на все прежние токены, сверяя версию из JWT с БД на каждом запросе); аватар — `PUT/GET/DELETE /profile/avatar`: JPEG/PNG/WebP до 5 МБ, формат по сигнатуре файла, файлы в `UPLOADS_DIR/avatars`) — тоже. Валидация — глобальный `ValidationPipe` через `APP_PIPE` в `AppModule`. Документация API (Swagger/OpenAPI): `http://localhost:3001/docs`, JSON — `/docs-json` (`apps/api/src/swagger.ts`); при `NODE_ENV=production` отключена. API отдаёт защитные заголовки `helmet` и без `X-Powered-By` (`apps/api/src/security.ts`).
 
+## LLM
+
+Env фасада и локального SDK (см. `.env.example`): `LLM_PROVIDER` (`local` | `anthropic`, по умолчанию `local`, другое значение — ошибка при импорте фасада), `OLLAMA_URL` (по умолчанию `http://localhost:11434`), `OLLAMA_MODEL` (`qwen3:14b`), `OLLAMA_NUM_CTX` (`32768`; Ollama молча режет вход сверх него), `OLLAMA_TIMEOUT_MS` (таймаут запроса, `300000`), `ANTHROPIC_API_KEY` (только для `anthropic`). Недоступная Ollama, таймаут и HTTP-ошибка — исключение из генератора с понятным текстом. Unit-тесты пакетов идут на мок-`fetch`, сеть и Ollama не нужны.
+
 ## Testing setup
 
 - Both apps use **Vitest** (not Jest) with `globals: true` — `describe`/`it`/`expect` are available without imports.
 - web: jsdom environment, `@testing-library/react`, jest-dom matchers loaded in `vitest.setup.ts`; tests are `src/**/*.{test,spec}.{ts,tsx}`, colocated with the code.
 - api: unit tests are `*.spec.ts` next to sources; e2e tests are `test/*.e2e-spec.ts` using `supertest`.
+- packages: `src/**/*.spec.ts` (node, `unstubEnvs`/`unstubGlobals`); контрактные `packages/llm/test/contract/*.contract.ts` в `pnpm test` не входят.
 - Unit: `pnpm test` (root, all apps) — no database needed. api e2e: `pnpm test:e2e` (root) starts Postgres, applies migrations and runs them. Full run table and per-file examples: `apps/api/CLAUDE.md`, section «Тесты».
 
 ## Gotchas

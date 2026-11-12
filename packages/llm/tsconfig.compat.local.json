@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.compat.base.json",
+  "compilerOptions": {
+    "paths": {
+      "@video-meetings/llm": ["./src/index.ts"]
+    }
+  }
+}

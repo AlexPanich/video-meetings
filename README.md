@@ -11,14 +11,15 @@
 
 ## Стек
 
-| Часть            | Технологии                                                                                                       |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Монорепо         | pnpm workspaces                                                                                                  |
-| Web (`apps/web`) | Next.js 16 (App Router), React 19, HeroUI v3, Tailwind CSS 4; BFF: JWT в HttpOnly-cookie, потоковый прокси к API |
-| API (`apps/api`) | NestJS 12 (ESM), CQRS, JWT, Swagger, helmet                                                                      |
-| База             | PostgreSQL 17, Prisma 7                                                                                          |
-| Тесты            | Vitest (unit в обоих приложениях), e2e API на supertest с реальной БД                                            |
-| Качество         | ESLint, Prettier, Husky (pre-commit: lint + тесты)                                                               |
+| Часть            | Технологии                                                                                                                |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Монорепо         | pnpm workspaces                                                                                                           |
+| Web (`apps/web`) | Next.js 16 (App Router), React 19, HeroUI v3, Tailwind CSS 4; BFF: JWT в HttpOnly-cookie, потоковый прокси к API          |
+| API (`apps/api`) | NestJS 12 (ESM), CQRS, JWT, Swagger, helmet                                                                               |
+| База             | PostgreSQL 17, Prisma 7                                                                                                   |
+| LLM (`packages`) | `llm-sdk` — интерфейс Claude Agent SDK поверх Ollama (Qwen3 в LAN); фасад `llm` выбирает его или Claude по `LLM_PROVIDER` |
+| Тесты            | Vitest (unit в обоих приложениях), e2e API на supertest с реальной БД                                                     |
+| Качество         | ESLint, Prettier, Husky (pre-commit: lint + тесты)                                                                        |
 
 ## Как сделан: AI-first
 
