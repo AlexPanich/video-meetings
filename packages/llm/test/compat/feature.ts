@@ -29,6 +29,8 @@ export async function simpleAnswer(prompt: string | AsyncIterable<SDKUserMessage
   const options: Options = {
     model: 'qwen3:14b',
     systemPrompt: 'Отвечай кратко.',
+    // Отключает встроенные инструменты Claude Code (ФС, shell) в режиме anthropic
+    tools: [],
   }
   const q: Query = query({ prompt, options })
 

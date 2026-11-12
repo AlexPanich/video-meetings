@@ -45,6 +45,7 @@ function requestBody(args: FetchArgs): {
   model: string
   messages: { role: string; content: string }[]
   stream?: boolean
+  think?: boolean
   options?: { num_ctx?: number }
 } {
   const [, init] = args
@@ -144,6 +145,31 @@ describe('query(): запрос к Ollama', () => {
     expect(body.stream).toBe(false)
     expect(body.options?.num_ctx).toBe(32768)
     expect(body.messages).toEqual([{ role: 'user', content: 'Привет' }])
+  })
+
+  it('выключает рассуждение Qwen3 (think: false): оно тратит время и контекст', async () => {
+    const fetchMock = mockOllama(() => jsonResponse(ollamaReply('ok')))
+
+    await collect(query({ prompt: 'Привет' }))
+
+    expect(requestBody(fetchMock.mock.calls[0]).think).toBe(false)
+  })
+
+  it('tools: [] принимается, запрос уходит', async () => {
+    const fetchMock = mockOllama(() => jsonResponse(ollamaReply('ok')))
+
+    await collect(query({ prompt: 'hi', options: { tools: [] } }))
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('встроенные инструменты в tools — понятная ошибка до запроса', async () => {
+    const fetchMock = mockOllama(() => jsonResponse(ollamaReply('ok')))
+
+    await expect(collect(query({ prompt: 'hi', options: { tools: ['Bash'] } }))).rejects.toThrow(
+      'Built-in tools are not supported',
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('options.model перекрывает OLLAMA_MODEL и попадает в system/init', async () => {
@@ -280,6 +306,17 @@ describe('query(): ошибки Ollama', () => {
     )
   }, 2000)
 
+  it('HTTP-ошибка с телом не в JSON: статус в тексте, тело только в cause', async () => {
+    mockOllama(() => new Response('<html>502 from proxy 10.0.0.5</html>', { status: 502 }))
+
+    const error: unknown = await collect(query({ prompt: 'hi' })).catch((e: unknown) => e)
+
+    if (!(error instanceof Error)) throw new Error('ожидалась ошибка')
+    expect(error.message).toContain('Ollama responded with 502')
+    expect(error.message).not.toContain('10.0.0.5')
+    expect(String(error.cause)).toContain('10.0.0.5')
+  })
+
   it('ответ 200 без message — понятная ошибка, а не TypeError', async () => {
     mockOllama(() => jsonResponse({ done: false }))
 
@@ -294,6 +331,16 @@ describe('query(): ошибки Ollama', () => {
     await expect(collect(query({ prompt: 'hi' }))).rejects.toThrow(
       'Ollama returned an unexpected response',
     )
+  })
+
+  it('сырое тело неожиданного ответа уходит в cause, а не в текст ошибки', async () => {
+    mockOllama(() => new Response('<html>internal proxy 10.0.0.5</html>', { status: 200 }))
+
+    const error: unknown = await collect(query({ prompt: 'hi' })).catch((e: unknown) => e)
+
+    if (!(error instanceof Error)) throw new Error('ожидалась ошибка')
+    expect(error.message).not.toContain('10.0.0.5')
+    expect(String(error.cause)).toContain('10.0.0.5')
   })
 
   it('OLLAMA_URL с query или hash — ошибка конфигурации', async () => {

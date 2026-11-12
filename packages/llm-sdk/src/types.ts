@@ -12,19 +12,46 @@ export interface TextBlock {
   text: string
 }
 
-export type ContentBlock = TextBlock
+/**
+ * Блок, который локальная модель не выдаёт, но выдаёт Claude Agent SDK (типы блоков —
+ * из опорной версии). Объявлен, чтобы код фич проверял `block.type === 'text'`, а не читал
+ * `.text` у любого блока: в режиме anthropic в `content` приходят и рассуждения, и инструменты.
+ */
+export interface OtherContentBlock {
+  type:
+    | 'thinking'
+    | 'redacted_thinking'
+    | 'tool_use'
+    | 'server_tool_use'
+    | 'web_search_tool_result'
+    | 'web_fetch_tool_result'
+    | 'advisor_tool_result'
+    | 'code_execution_tool_result'
+    | 'bash_code_execution_tool_result'
+    | 'text_editor_code_execution_tool_result'
+    | 'tool_search_tool_result'
+    | 'mcp_tool_use'
+    | 'mcp_tool_result'
+    | 'container_upload'
+    | 'compaction'
+    | 'fallback'
+    | 'mcp_tool_listing'
+}
+
+export type ContentBlock = TextBlock | OtherContentBlock
 
 /** Сообщение пользователя в формате Messages API (`MessageParam` с ролью `user`). */
 export interface UserMessageParam {
   role: 'user'
-  content: string | ContentBlock[]
+  content: string | TextBlock[]
 }
 
 export interface Usage {
   input_tokens: number
   output_tokens: number
-  cache_creation_input_tokens: number
-  cache_read_input_tokens: number
+  /** В сообщениях `assistant` оригинала бывает `null`; локально всегда 0. */
+  cache_creation_input_tokens: number | null
+  cache_read_input_tokens: number | null
 }
 
 /** Ответ модели (подмножество `BetaMessage`). */
@@ -34,7 +61,17 @@ export interface AssistantMessage {
   role: 'assistant'
   model: string
   content: ContentBlock[]
-  stop_reason: 'end_turn' | 'max_tokens' | 'stop_sequence' | 'tool_use' | null
+  /** Локально бывают `end_turn` и `max_tokens`; остальные значения — из оригинала. */
+  stop_reason:
+    | 'end_turn'
+    | 'max_tokens'
+    | 'stop_sequence'
+    | 'tool_use'
+    | 'pause_turn'
+    | 'compaction'
+    | 'refusal'
+    | 'model_context_window_exceeded'
+    | null
   stop_sequence: string | null
   usage: Usage
 }
@@ -128,13 +165,28 @@ export interface Options {
   /** Системный промпт; массив склеивается через пустую строку. */
   systemPrompt?: string | string[]
   maxTurns?: number
+  /**
+   * Базовый набор встроенных инструментов Claude Code. Только он их ограничивает: `allowedTools`
+   * в оригинале — список автоодобрения, а не фильтр. Код фич передаёт `tools: []`, чтобы
+   * прод-агент на Claude Agent SDK не получил ФС и shell. Локально встроенных инструментов нет,
+   * поэтому принимается только `[]`.
+   */
+  tools?: string[]
   allowedTools?: string[]
   disallowedTools?: string[]
   permissionMode?: PermissionMode
 }
 
+/**
+ * Ответ на `interrupt()` (подмножество полей оригинала). Локально очереди сообщений нет,
+ * поэтому `interrupt()` возвращает `undefined`, как оригинал, когда квитанции нет.
+ */
+export interface SDKControlInterruptResponse {
+  still_queued: string[]
+}
+
 export interface Query extends AsyncGenerator<SDKMessage, void> {
   /** Прерывает текущий запрос к модели; генератор завершается без ошибки. */
-  interrupt(): Promise<void>
+  interrupt(): Promise<SDKControlInterruptResponse | undefined>
   setPermissionMode(mode: PermissionMode): Promise<void>
 }

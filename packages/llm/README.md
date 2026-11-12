@@ -18,7 +18,9 @@ import type { SDKMessage } from '@video-meetings/llm'
 В режиме `local` модуль Anthropic не импортируется, поэтому запросов к Anthropic нет — это
 проверяет тест с перехватом `fetch`, `http/https.request` и `child_process.spawn`.
 
-Типы фасада — типы локального SDK, они повторяют оригинал.
+Типы фасада — типы локального SDK, они повторяют оригинал (подмножество полей и вариантов). Правила
+для кода фич (`tools: []`, `default` в `switch` по типу сообщения, текст только из блоков `text`) —
+в [README `llm-sdk`](../llm-sdk/README.md#правила-для-кода-фич).
 
 ## Проверки
 
@@ -29,6 +31,10 @@ pnpm --filter @video-meetings/llm typecheck:compat
 
 `typecheck:compat` компилирует `test/compat/feature.ts` («код фичи») дважды: с самим фасадом
 (`src/index.ts`, локальный SDK) и с фасадом на `@anthropic-ai/claude-agent-sdk`, без `any` и приведений.
+`test/compat/signatures.ts` сверяет локальные типы с опорной версией: опции и `prompt` локального
+SDK принимает оригинал, а сообщения `assistant`, `result`, `system/init` и методы `Query` оригинала
+подходят под локальные типы. Фасад приводит модуль Anthropic к локальным типам (`as unknown as`),
+и эта проверка — то, что делает приведение безопасным.
 
 Контрактный набор ходит в живую модель и запускается вручную:
 

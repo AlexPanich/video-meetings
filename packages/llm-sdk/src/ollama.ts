@@ -46,12 +46,15 @@ export async function chat(
         model: request.model,
         messages: request.messages,
         stream: false,
+        // Рассуждение Qwen3 занимает сотни токенов на ход и вытесняет контекст, а ответ не улучшает
+        // ни для коротких ответов, ни для tool calling.
+        think: false,
         options: { num_ctx: config.numCtx },
       }),
       signal,
     })
     if (!response.ok) {
-      throw new Error(`Ollama responded with ${response.status}: ${await errorText(response)}`)
+      throw await httpError(response)
     }
     return parseChatResponse(await response.text())
   } catch (error) {
@@ -71,28 +74,34 @@ export async function chat(
 
 /** Проверяет форму ответа: прокси или сбой Ollama может вернуть 200 не с тем телом. */
 function parseChatResponse(text: string): OllamaChatResponse {
+  // Сырое тело (HTML прокси, внутренние адреса) — только в cause: текст ошибки может дойти до UI.
+  const unexpected = () =>
+    new Error('Ollama returned an unexpected response', { cause: text.slice(0, 500) })
   let body: unknown
   try {
     body = JSON.parse(text)
   } catch {
-    throw new Error(`Ollama returned an unexpected response: ${text.slice(0, 200)}`)
+    throw unexpected()
   }
   const message = (body as { message?: { content?: unknown } } | null)?.message
-  if (typeof message?.content !== 'string') {
-    throw new Error(`Ollama returned an unexpected response: ${text.slice(0, 200)}`)
-  }
+  if (typeof message?.content !== 'string') throw unexpected()
   return body as OllamaChatResponse
 }
 
-async function errorText(response: Response): Promise<string> {
+/** HTTP-ошибка: в тексте — сообщение Ollama из `{ error }`, чужое тело (прокси) — только в cause. */
+async function httpError(response: Response): Promise<Error> {
   const text = await response.text().catch(() => '')
   try {
     const body = JSON.parse(text) as { error?: unknown }
-    if (typeof body.error === 'string') return body.error
+    if (typeof body.error === 'string') {
+      return new Error(`Ollama responded with ${response.status}: ${body.error}`)
+    }
   } catch {
-    // не JSON — отдаём текст как есть
+    // не JSON — тело только в cause
   }
-  return text.trim() || response.statusText || 'empty response'
+  return new Error(`Ollama responded with ${response.status} ${response.statusText}`.trim(), {
+    cause: text.slice(0, 500),
+  })
 }
 
 function describeCause(error: TypeError): string {

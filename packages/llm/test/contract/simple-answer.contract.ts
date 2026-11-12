@@ -11,7 +11,7 @@ describe.runIf(process.env.LLM_CONTRACT === '1')(`контракт: просто
       options: {
         systemPrompt: 'Ты отвечаешь кратко, без пояснений.',
         maxTurns: 1,
-        allowedTools: [],
+        tools: [],
       },
     })) {
       messages.push(message)

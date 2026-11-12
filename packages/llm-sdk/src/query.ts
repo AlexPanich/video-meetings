@@ -7,6 +7,7 @@ import type {
   Options,
   PermissionMode,
   Query,
+  SDKControlInterruptResponse,
   SDKMessage,
   SDKUserMessage,
   Usage,
@@ -31,9 +32,9 @@ export function query({ prompt, options = {} }: QueryParams): Query {
   const generator = run(prompt, options, state)
 
   return Object.assign(generator, {
-    interrupt(): Promise<void> {
+    interrupt(): Promise<SDKControlInterruptResponse | undefined> {
       state.controller.abort()
-      return Promise.resolve()
+      return Promise.resolve(undefined)
     },
     setPermissionMode(mode: PermissionMode): Promise<void> {
       state.permissionMode = mode
@@ -53,6 +54,11 @@ async function* run(
   state: QueryState,
 ): AsyncGenerator<SDKMessage, void> {
   const config = readOllamaConfig()
+  if (options.tools && options.tools.length > 0) {
+    throw new Error(
+      `Built-in tools are not supported by the local SDK, pass tools: [] (got ${options.tools.join(', ')})`,
+    )
+  }
   const model = options.model ?? config.model
   const sessionId = randomUUID()
   const history: OllamaMessage[] = []

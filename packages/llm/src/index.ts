@@ -6,10 +6,12 @@ import type * as LocalSdk from '@video-meetings/llm-sdk'
 
 export type {
   ContentBlock,
+  OtherContentBlock,
   Options,
   PermissionMode,
   Query,
   SDKAssistantMessage,
+  SDKControlInterruptResponse,
   SDKMessage,
   SDKResultError,
   SDKResultMessage,
