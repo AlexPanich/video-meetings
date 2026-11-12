@@ -1,7 +1,7 @@
 {
-  "milestone": "Фаза 2: Инструменты, агентный цикл и права",
+  "milestone": "Фаза 3: Структурированный ответ, стриминг и отмена",
   "maxIterations": 10,
   "maxTurns": 150,
-  "branch": "feature/llm-sdk-phase-2",
+  "branch": "feature/llm-sdk-phase-3",
   "prompt": "Прочитай .claude/ralph.md и следуй правилам оттуда. Возьми следующую открытую Issue из milestone '{milestone}' и реализуй его в '{branch}'"
 }
