@@ -55,3 +55,7 @@ pnpm --filter @video-meetings/llm test:contract
 `error_max_turns`, deny в `PreToolUse` и в `canUseTool`; `structured_output`; `stream_event`,
 `interrupt()` и `abortController`; `resume` и `forkSession`; внешний stdio-MCP-сервер (фикстура
 `packages/llm-sdk/src/testing/fixtures/echo-mcp-server.mjs`).
+
+Последний прогон против `LLM_PROVIDER=local` (Ollama, `qwen3:14b`, `num_ctx` 32768, 2026-11-15):
+весь набор, все 13 сценариев, прошёл два раза подряд, расхождений с оригиналом не найдено. Прогона
+против `@anthropic-ai/claude-agent-sdk` ещё не было, он ждёт ключа (#155).
