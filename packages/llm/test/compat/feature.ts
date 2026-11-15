@@ -4,7 +4,7 @@
 // - tsconfig.compat.anthropic.json — на `@anthropic-ai/claude-agent-sdk`.
 // Без `any` и приведений типов. Каждая SDK-фаза дописывает сюда свои возможности.
 import { z } from 'zod'
-import { createSdkMcpServer, query, tool } from '@video-meetings/llm'
+import { AbortError, createSdkMcpServer, query, tool } from '@video-meetings/llm'
 import type {
   CanUseTool,
   HookCallback,
@@ -245,6 +245,90 @@ export async function toolAnswer(): Promise<ToolAnswer> {
       default:
         break
     }
+  }
+  return answer
+}
+
+// --- Фаза 3: структурированный ответ, стриминг и отмена ---
+
+export interface MeetingSummary {
+  summary: string
+  decisions: string[]
+}
+
+const summarySchema = {
+  type: 'object',
+  properties: {
+    summary: { type: 'string' },
+    decisions: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['summary', 'decisions'],
+  additionalProperties: false,
+}
+
+function isMeetingSummary(value: unknown): value is MeetingSummary {
+  if (typeof value !== 'object' || value === null) return false
+  if (!('summary' in value) || typeof value.summary !== 'string') return false
+  return (
+    'decisions' in value &&
+    Array.isArray(value.decisions) &&
+    value.decisions.every((item: unknown) => typeof item === 'string')
+  )
+}
+
+export interface StructuredAnswer {
+  summary: MeetingSummary | null
+  error: string | null
+  partialText: string
+  aborted: boolean
+}
+
+export async function structuredSummary(timeoutMs: number): Promise<StructuredAnswer> {
+  const abortController = new AbortController()
+  const timer = setTimeout(() => abortController.abort(), timeoutMs)
+  const options: Options = {
+    systemPrompt: 'Ты делаешь саммари встречи по её файлам.',
+    tools: [],
+    mcpServers: { meeting: meetingServer },
+    allowedTools: ['mcp__meeting__list_files', 'mcp__meeting__read_file'],
+    permissionMode: 'dontAsk',
+    maxTurns: 10,
+    abortController,
+    includePartialMessages: true,
+    outputFormat: { type: 'json_schema', schema: summarySchema },
+  }
+
+  const answer: StructuredAnswer = { summary: null, error: null, partialText: '', aborted: false }
+  const q: Query = query({ prompt: 'Сделай саммари встречи', options })
+  try {
+    for await (const message of q) {
+      switch (message.type) {
+        case 'stream_event':
+          if (
+            message.event.type === 'content_block_delta' &&
+            message.event.delta.type === 'text_delta'
+          ) {
+            answer.partialText += message.event.delta.text
+          }
+          break
+        case 'result':
+          if (message.subtype !== 'success') {
+            answer.error = message.errors.join('; ')
+          } else if (isMeetingSummary(message.structured_output)) {
+            answer.summary = message.structured_output
+          } else {
+            answer.error = 'structured_output не по схеме'
+          }
+          break
+        default:
+          break
+      }
+    }
+  } catch (error) {
+    if (!(error instanceof AbortError)) throw error
+    answer.aborted = true
+  } finally {
+    clearTimeout(timer)
   }
   return answer
 }
