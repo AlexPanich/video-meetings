@@ -32,7 +32,7 @@ export function structuredOutput(format: OutputFormat | undefined): StructuredOu
     check(text) {
       let value: unknown
       try {
-        value = JSON.parse(text)
+        value = JSON.parse(unfence(text))
       } catch {
         return { ok: false, error: 'The response is not valid JSON.' }
       }
@@ -49,6 +49,15 @@ export function structuredOutput(format: OutputFormat | undefined): StructuredOu
       }
     },
   }
+}
+
+/**
+ * Снимает одну внешнюю markdown-обёртку ```json … ``` (или ``` … ```): без `format` Qwen часто
+ * так оформляет JSON, и такой ответ тратил бы попытку. Всё остальное разбирается как есть.
+ */
+function unfence(text: string): string {
+  const match = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n?```$/i.exec(text.trim())
+  return match ? match[1] : text
 }
 
 /**

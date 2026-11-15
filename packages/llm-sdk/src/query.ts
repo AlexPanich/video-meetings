@@ -322,7 +322,7 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
         if (structuredAttempts >= STRUCTURED_OUTPUT_ATTEMPTS) {
           const exhausted: SDKResultError = {
             ...resultBase(message.stop_reason),
-            subtype: 'error_during_execution',
+            subtype: 'error_max_structured_output_retries',
             is_error: true,
             errors: [
               `Model did not return output matching the JSON schema after ${structuredAttempts} attempts. ${checked.error}`,

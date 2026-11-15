@@ -122,6 +122,35 @@ describe('outputFormat: structured_output', () => {
     if (result.subtype !== 'success') throw new Error(`получен ${result.subtype}`)
     expect(result.structured_output).toEqual(VALID)
   })
+
+  it('JSON в markdown-обёртке ```json — разбирается с первой попытки', async () => {
+    const fetchMock = scriptedOllama(
+      ollamaReply(`<think>подумаю</think>\n\`\`\`json\n${JSON.stringify(VALID)}\n\`\`\`\n`),
+    )
+
+    const messages = await collect(query({ prompt: 'Саммари', options: structuredOptions() }))
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const result = lastResult(messages)
+    if (result.subtype !== 'success') throw new Error(`получен ${result.subtype}`)
+    expect(result.structured_output).toEqual(VALID)
+  })
+
+  it('обёртка без указания языка тоже снимается, текст вокруг JSON — нет', async () => {
+    const fetchMock = scriptedOllama(
+      ollamaReply(`\`\`\`\n${JSON.stringify(VALID)}\n\`\`\``),
+      ollamaReply(`Вот ответ:\n\`\`\`json\n${JSON.stringify(VALID)}\n\`\`\``),
+      ollamaReply(JSON.stringify(VALID)),
+    )
+
+    const first = await collect(query({ prompt: 'Саммари', options: structuredOptions() }))
+    expect(lastResult(first).subtype).toBe('success')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    const second = await collect(query({ prompt: 'Саммари', options: structuredOptions() }))
+    expect(lastResult(second).subtype).toBe('success')
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
 })
 
 describe('outputFormat: проверка по схеме и повторы', () => {
@@ -177,14 +206,14 @@ describe('outputFormat: проверка по схеме и повторы', () 
     expect(lastResult(messages).subtype).toBe('success')
   })
 
-  it('невалидный ответ раз за разом — ограниченное число попыток, затем error_during_execution', async () => {
+  it('невалидный ответ раз за разом — ограниченное число попыток, затем error_max_structured_output_retries', async () => {
     const fetchMock = scriptedOllama(ollamaReply('не JSON'))
 
     const messages = await collect(query({ prompt: 'Саммари', options: structuredOptions() }))
 
     expect(fetchMock).toHaveBeenCalledTimes(MAX_ATTEMPTS)
     const result = lastResult(messages)
-    expect(result.subtype).toBe('error_during_execution')
+    expect(result.subtype).toBe('error_max_structured_output_retries')
     if (result.subtype === 'success') return
     expect(result.is_error).toBe(true)
     expect(result.errors.join('\n')).toMatch(/schema|схем/i)

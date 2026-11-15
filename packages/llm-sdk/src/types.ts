@@ -165,10 +165,7 @@ export interface SDKResultSuccess extends SDKResultBase {
 }
 
 export interface SDKResultError extends SDKResultBase {
-  /**
-   * Исчерпанные повторы `outputFormat` локально — `error_during_execution`
-   * (`error_max_structured_output_retries` — только из оригинала).
-   */
+  /** Исчерпанные повторы `outputFormat` — `error_max_structured_output_retries`, как в оригинале. */
   subtype:
     | 'error_during_execution'
     | 'error_max_turns'
