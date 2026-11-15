@@ -43,11 +43,13 @@ SDK принимает оригинал, а сообщения `assistant`, `res
 Контрактный набор ходит в живую модель и запускается вручную:
 
 ```bash
-LLM_CONTRACT=1 LLM_PROVIDER=local OLLAMA_URL=http://<ip>:11434 pnpm --filter @video-meetings/llm test:contract
-LLM_CONTRACT=1 LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=... pnpm --filter @video-meetings/llm test:contract
+pnpm --filter @video-meetings/llm test:contract
 ```
 
-Переменные читаются из корневого `.env`, заданные в shell имеют приоритет.
+Провайдер и адрес модели (`LLM_PROVIDER`, `OLLAMA_URL`, `ANTHROPIC_API_KEY`) читаются из корневого
+`.env`, заданные в shell имеют приоритет: например,
+`LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=... pnpm --filter @video-meetings/llm test:contract`.
+Флаг `LLM_CONTRACT=1` выставляет сам конфиг `vitest.config.contract.ts`.
 
 Сценарии (`test/contract/*.contract.ts`): простой ответ; вызов SDK-инструмента, `maxTurns` →
 `error_max_turns`, deny в `PreToolUse` и в `canUseTool`; `structured_output`; `stream_event`,

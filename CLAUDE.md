@@ -31,7 +31,7 @@ Per-app commands via `pnpm --filter <web|api|@video-meetings/llm-sdk|@video-meet
 
 - web: `typecheck` (`next typegen && tsc --noEmit`), `test:watch`
 - api: `test:e2e` (separate config `vitest.config.e2e.ts`, picks up `test/**/*.e2e-spec.ts`), `test:cov`, `test:debug`, `start:debug`
-- llm-sdk, llm: `build`, `lint`, `test`, `typecheck`; llm ещё `typecheck:compat` и `test:contract` (живая модель, только вручную: `LLM_CONTRACT=1 pnpm --filter @video-meetings/llm test:contract`)
+- llm-sdk, llm: `build`, `lint`, `test`, `typecheck`; llm ещё `typecheck:compat` и `test:contract` (живая модель, только вручную: `pnpm --filter @video-meetings/llm test:contract`, провайдер и `OLLAMA_URL` — из корневого `.env`)
 
 Single test file / single test name (Vitest in both apps):
 
