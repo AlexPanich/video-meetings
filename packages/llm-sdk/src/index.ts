@@ -1,5 +1,6 @@
 export { AbortError } from './abort.js'
 export { query } from './query.js'
+export { InMemorySessionStore } from './sessions.js'
 export { createSdkMcpServer, tool } from './tools.js'
 export type {
   AnyZodRawShape,
@@ -18,8 +19,11 @@ export type {
   HookPermissionDecision,
   InferShape,
   JsonSchemaOutputFormat,
+  McpHttpServerConfig,
   McpSdkServerConfigWithInstance,
   McpServerConfig,
+  McpSSEServerConfig,
+  McpStdioServerConfig,
   ModelUsage,
   OtherContentBlock,
   OtherHookEvent,
@@ -44,7 +48,10 @@ export type {
   SDKUserMessage,
   SdkMcpToolDefinition,
   SessionEndHookInput,
+  SessionKey,
   SessionStartHookInput,
+  SessionStore,
+  SessionStoreEntry,
   StopHookInput,
   StreamEvent,
   TextBlock,

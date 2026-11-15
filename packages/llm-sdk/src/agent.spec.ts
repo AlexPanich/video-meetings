@@ -687,6 +687,7 @@ describe('права: allowedTools, disallowedTools, canUseTool', () => {
           disallowedTools: [MUL],
           allowedTools: [MUL],
           permissionMode: 'bypassPermissions',
+          allowDangerouslySkipPermissions: true,
           mcpServers: { calc: server },
         },
       }),
@@ -738,13 +739,35 @@ describe('права: permissionMode', () => {
     const messages = await collect(
       query({
         prompt: 'go',
-        options: { permissionMode: 'bypassPermissions', canUseTool, mcpServers: { calc: server } },
+        options: {
+          permissionMode: 'bypassPermissions',
+          allowDangerouslySkipPermissions: true,
+          canUseTool,
+          mcpServers: { calc: server },
+        },
       }),
     )
 
     expect(addHandler).toHaveBeenCalledTimes(1)
     expect(canUseTool).not.toHaveBeenCalled()
     expect(lastResult(messages).permission_denials).toEqual([])
+  })
+
+  it('bypassPermissions без allowDangerouslySkipPermissions — исключение до запроса к модели', async () => {
+    const fetchMock = scriptedOllama(ollamaReply('ok'))
+    const { server } = calcServer()
+
+    await expect(
+      collect(
+        query({
+          prompt: 'go',
+          options: { permissionMode: 'bypassPermissions', mcpServers: { calc: server } },
+        }),
+      ),
+    ).rejects.toThrow(
+      "permissionMode 'bypassPermissions' requires allowDangerouslySkipPermissions: true",
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('plan: инструменты не выполняются даже из allowedTools, модель получает отказ', async () => {
@@ -1264,6 +1287,7 @@ describe('ревью фазы 2: сбои хуков, зависшие обра�
         prompt: 'go',
         options: {
           permissionMode: 'bypassPermissions',
+          allowDangerouslySkipPermissions: true,
           mcpServers: { calc: server },
           hooks: { PreToolUse: [{ hooks: [failing] }] },
         },
@@ -1302,7 +1326,11 @@ describe('ревью фазы 2: сбои хуков, зависшие обра�
     const server = createSdkMcpServer({ name: 'slow', version: '1.0.0', tools: [hang] })
     const q = query({
       prompt: 'go',
-      options: { permissionMode: 'bypassPermissions', mcpServers: { slow: server } },
+      options: {
+        permissionMode: 'bypassPermissions',
+        allowDangerouslySkipPermissions: true,
+        mcpServers: { slow: server },
+      },
     })
 
     const types: string[] = []

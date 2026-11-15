@@ -1,10 +1,31 @@
-// Мок-транспорт Ollama для unit-тестов фазы 3 (в сборку не входит, см. tsconfig.build.json).
-// Подменяет глобальный `fetch`: сеть и живая Ollama не нужны.
+// Мок-транспорт Ollama для unit-тестов (в сборку не входит, см. tsconfig.build.json).
+// Подменяет глобальный `fetch`: сеть и живая Ollama не нужны. Запросы на loopback (тестовые
+// MCP-серверы по http/sse из `mcp-servers.ts`) уходят в настоящий `fetch` и в `mock.calls` мока
+// не попадают; запрос на любой другой адрес — ошибка теста, а не поход в сеть.
 import type { SDKMessage, SDKUserMessage } from '../index.js'
 
 export const OLLAMA_URL = 'http://ollama.test:11434'
 
 export type FetchArgs = [input: string | URL | Request, init?: RequestInit]
+
+const realFetch = globalThis.fetch
+
+function requestUrl(input: FetchArgs[0]): string {
+  if (typeof input === 'string') return input
+  return input instanceof URL ? input.href : input.url
+}
+
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]'])
+
+/** Ставит мок вместо глобального `fetch`: Ollama — в мок, loopback — в настоящий `fetch`. */
+function stubOllamaFetch(fetchMock: (...args: FetchArgs) => Promise<Response>): void {
+  vi.stubGlobal('fetch', (...args: FetchArgs) => {
+    const url = requestUrl(args[0])
+    if (url.startsWith(OLLAMA_URL)) return fetchMock(...args)
+    if (LOOPBACK.has(new URL(url).hostname)) return realFetch(...args)
+    return Promise.reject(new Error(`Unexpected request outside the Ollama mock: ${url}`))
+  })
+}
 
 export interface OllamaRequestMessage {
   role: string
@@ -106,7 +127,7 @@ export function scriptedOllama(...replies: unknown[]) {
     index += 1
     return Promise.resolve(reply instanceof Response ? reply.clone() : jsonResponse(reply))
   })
-  vi.stubGlobal('fetch', fetchMock)
+  stubOllamaFetch(fetchMock)
   return fetchMock
 }
 
@@ -120,7 +141,7 @@ export function hangingOllama() {
         init?.signal?.addEventListener('abort', () => reject(init.signal?.reason))
       }),
   )
-  vi.stubGlobal('fetch', fetchMock)
+  stubOllamaFetch(fetchMock)
   return fetchMock
 }
 

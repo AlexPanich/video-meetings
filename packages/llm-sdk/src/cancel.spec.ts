@@ -253,7 +253,10 @@ describe('setPermissionMode()', () => {
     )
     const prompt = manualPrompt()
     prompt.send('первое')
-    const q = query({ prompt: prompt.stream, options: { mcpServers: { notes: server } } })
+    const q = query({
+      prompt: prompt.stream,
+      options: { mcpServers: { notes: server }, allowDangerouslySkipPermissions: true },
+    })
 
     const results: { denials: number; subtype: string }[] = []
     for await (const message of q) {
@@ -274,6 +277,24 @@ describe('setPermissionMode()', () => {
     ])
     expect(handler).toHaveBeenCalledTimes(1)
     expect(handler).toHaveBeenCalledWith({ text: 'b' }, expect.anything())
+  })
+
+  it('bypassPermissions без allowDangerouslySkipPermissions отклоняется, режим не меняется', async () => {
+    const { server, handler } = noteServer()
+    scriptedOllama(
+      toolCallReply({ name: 'mcp__notes__save_note', arguments: { text: 'a' } }),
+      ollamaReply('Отказано'),
+    )
+    const q = query({ prompt: 'go', options: { mcpServers: { notes: server } } })
+
+    await expect(q.setPermissionMode('bypassPermissions')).rejects.toThrow(
+      "permissionMode 'bypassPermissions' requires allowDangerouslySkipPermissions: true",
+    )
+    const messages = await collect(q)
+
+    expect(handler).not.toHaveBeenCalled()
+    const result = messages.find((message) => message.type === 'result')
+    expect(result?.type === 'result' && result.permission_denials).toHaveLength(1)
   })
 
   it('новый режим виден хукам в permission_mode', async () => {

@@ -240,8 +240,67 @@ export interface McpSdkServerConfigWithInstance {
   instance: McpServer
 }
 
-/** Локально поддерживаются только SDK-серверы (`createSdkMcpServer`), без stdio/http. */
-export type McpServerConfig = McpSdkServerConfigWithInstance
+/** Внешний MCP-сервер — процесс, с которым SDK говорит по stdin/stdout. `type` можно не указывать. */
+export interface McpStdioServerConfig {
+  type?: 'stdio'
+  command: string
+  args?: string[]
+  /** Добавляется к безопасному набору переменных окружения (`HOME`, `PATH`, …). */
+  env?: Record<string, string>
+  /** Таймаут вызова инструмента, мс. */
+  timeout?: number
+}
+
+/** Внешний MCP-сервер по Streamable HTTP. */
+export interface McpHttpServerConfig {
+  type: 'http'
+  url: string
+  headers?: Record<string, string>
+  timeout?: number
+}
+
+/** Внешний MCP-сервер по устаревшему транспорту HTTP+SSE. */
+export interface McpSSEServerConfig {
+  type: 'sse'
+  url: string
+  headers?: Record<string, string>
+  timeout?: number
+}
+
+/** SDK-серверы (`createSdkMcpServer`) и внешние: `stdio`, `http`, `sse`. */
+export type McpServerConfig =
+  McpStdioServerConfig | McpSSEServerConfig | McpHttpServerConfig | McpSdkServerConfigWithInstance
+
+// --- Сессии ---
+
+/** Ключ записи в хранилище сессий (как в оригинале). */
+export interface SessionKey {
+  /** Область сессий; локально — cwd, приведённый к безопасным символам. */
+  projectKey: string
+  sessionId: string
+  /** Нет — основной транскрипт. Локально SDK пишет только его. */
+  subpath?: string
+}
+
+/** Одна запись транскрипта: JSON-объект со строковым `type`, остальное — непрозрачно. */
+export interface SessionStoreEntry {
+  type: string
+  uuid?: string
+  timestamp?: string
+  [k: string]: unknown
+}
+
+/**
+ * Хранилище сессий (как `SessionStore` оригинала). `load` возвращает `null` для неизвестного
+ * ключа, записи — deep-equal записанным. `listSessions` нужен для `continue`.
+ */
+export interface SessionStore {
+  append(key: SessionKey, entries: SessionStoreEntry[]): Promise<void>
+  load(key: SessionKey): Promise<SessionStoreEntry[] | null>
+  listSessions?(projectKey: string): Promise<Array<{ sessionId: string; mtime: number }>>
+  delete?(key: SessionKey): Promise<void>
+  listSubkeys?(key: { projectKey: string; sessionId: string }): Promise<string[]>
+}
 
 // --- Права ---
 
@@ -338,7 +397,7 @@ export interface UserPromptSubmitHookInput extends BaseHookInput {
 
 export interface SessionStartHookInput extends BaseHookInput {
   hook_event_name: 'SessionStart'
-  /** Локально всегда `startup`. */
+  /** Локально `startup` или `resume` (продолжение и ответвление сессии). */
   source: 'startup' | 'resume' | 'clear' | 'compact' | 'fork'
 }
 
@@ -424,26 +483,54 @@ export interface Options {
    * поэтому принимается только `[]`.
    */
   tools?: string[]
-  /** SDK-серверы из `createSdkMcpServer()`; инструменты называются `mcp__<ключ>__<имя>`. */
+  /**
+   * SDK-серверы из `createSdkMcpServer()` и внешние (`stdio`, `http`, `sse`); инструменты
+   * называются `mcp__<ключ>__<имя>`. Внешний сервер, к которому не удалось подключиться, — статус
+   * `failed` в `system/init`, сессия идёт без его инструментов.
+   */
   mcpServers?: Record<string, McpServerConfig>
   /** Автоодобрение: имена инструментов или `mcp__<сервер>` для всех инструментов сервера. */
   allowedTools?: string[]
   /** Запрет: инструмент не уходит модели и не выполняется ни при каких правах. */
   disallowedTools?: string[]
   permissionMode?: PermissionMode
+  /**
+   * Обязателен для `permissionMode: 'bypassPermissions'` (в опциях и в `setPermissionMode()`),
+   * как в оригинале: без него — исключение.
+   */
+  allowDangerouslySkipPermissions?: boolean
   /** Решает за инструменты вне `allowedTools`; без него такие вызовы отклоняются. */
   canUseTool?: CanUseTool
   hooks?: Partial<Record<HookEvent, HookCallbackMatcher[]>>
   /**
    * Финальный ответ — JSON по схеме: уходит в Ollama как `format`, проверяется, при ошибке
    * модель получает её описание и отвечает заново (всего 3 попытки, затем
-   * `error_during_execution`). Результат — `structured_output` в `result/success`.
+   * `error_max_structured_output_retries`). Результат — `structured_output` в `result/success`.
    */
   outputFormat?: OutputFormat
   /** Отдавать `stream_event` по ходу генерации (запрос к Ollama идёт потоком). */
   includePartialMessages?: boolean
   /** Отмена сессии: обрывает текущий запрос к Ollama, генератор бросает `AbortError`. */
   abortController?: AbortController
+  /** Продолжить сессию с этим id: модель получает её историю. Неизвестный id — ошибка. */
+  resume?: string
+  /** Продолжить последнюю сессию хранилища (по `mtime`); нет сессий — новая. */
+  continue?: boolean
+  /** С `resume`/`continue`: история уходит в новую сессию, исходная не меняется. */
+  forkSession?: boolean
+  /**
+   * Где хранятся сессии. По умолчанию — в памяти процесса (оригинал пишет на диск): между
+   * процессами сессии продолжаются только через своё хранилище.
+   */
+  sessionStore?: SessionStore
+  /**
+   * `false` — ходы сессии не сохраняются (как в оригинале, где это отключает запись транскрипта
+   * на диск): такую сессию нельзя продолжить через `resume`, и она не занимает память хранилища
+   * по умолчанию. Вместе с `sessionStore` — ошибка, как в оригинале.
+   */
+  persistSession?: boolean
+  /** Таймаут каждого `sessionStore.load()`/`listSessions()` при `resume`/`continue`, мс (60 000). */
+  loadTimeoutMs?: number
 }
 
 /**

@@ -30,6 +30,25 @@ describe('ContextBudget.calibrate', () => {
 })
 
 describe('ContextBudget.fit', () => {
+  it('диалог без инструментов не помещается — самые старые обмены заменяются пометкой', () => {
+    const budget = new ContextBudget(2048, [])
+    const messages: OllamaMessage[] = [
+      { role: 'system', content: 'Ты помощник' },
+      user('a'.repeat(2000)),
+      { role: 'assistant', content: 'b'.repeat(2000) },
+      user('c'.repeat(1000)),
+      { role: 'assistant', content: 'd'.repeat(100) },
+      user('Последний вопрос'),
+    ]
+
+    const fitted = budget.fit(messages)
+
+    expect(fitted.messages[0]).toBe(messages[0])
+    expect(fitted.messages[1].content).toMatch(/2 earlier messages .* omitted/)
+    expect(fitted.messages.slice(2)).toEqual(messages.slice(3))
+    expect(budget.estimate(fitted.messages)).toBeLessThanOrEqual(budget.inputTokens)
+  })
+
   it('сообщение пользователя больше бюджета — ContextOverflowError', () => {
     const budget = new ContextBudget(2048, [])
     expect(() => budget.fit([user('x'.repeat(10_000))])).toThrow(ContextOverflowError)

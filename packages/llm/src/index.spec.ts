@@ -8,6 +8,7 @@ const anthropic = vi.hoisted(() => ({
   tool: vi.fn(),
   createSdkMcpServer: vi.fn(),
   AbortError: class AbortError extends Error {},
+  InMemorySessionStore: class InMemorySessionStore {},
 }))
 
 vi.mock('@anthropic-ai/claude-agent-sdk', () => {
@@ -17,6 +18,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => {
     tool: anthropic.tool,
     createSdkMcpServer: anthropic.createSdkMcpServer,
     AbortError: anthropic.AbortError,
+    InMemorySessionStore: anthropic.InMemorySessionStore,
   }
 })
 
@@ -44,6 +46,7 @@ describe('фасад @video-meetings/llm: выбор реализации', () =
     expect(facade.createSdkMcpServer).toBe(local.createSdkMcpServer)
     expect(facade.AbortError).toBe(local.AbortError)
     expect(facade.AbortError).toEqual(expect.any(Function))
+    expect(facade.InMemorySessionStore).toBe(local.InMemorySessionStore)
     expect(anthropic.loaded).not.toHaveBeenCalled()
   })
 
@@ -66,6 +69,7 @@ describe('фасад @video-meetings/llm: выбор реализации', () =
     expect(facade.tool).toBe(anthropic.tool)
     expect(facade.createSdkMcpServer).toBe(anthropic.createSdkMcpServer)
     expect(facade.AbortError).toBe(anthropic.AbortError)
+    expect(facade.InMemorySessionStore).toBe(anthropic.InMemorySessionStore)
   })
 
   it('неизвестный LLM_PROVIDER — ошибка с допустимыми значениями', async () => {

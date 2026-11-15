@@ -25,6 +25,8 @@ export interface Session {
   state: QueryState
   /** Полная история; в запрос уходит её версия, усечённая `context`. */
   history: OllamaMessage[]
+  /** Дописывает новые сообщения истории в хранилище сессий; вызывается перед каждым `result`. */
+  persist: () => Promise<void>
   context: ContextBudget
   tools: Map<string, RegisteredTool>
   ollamaTools: OllamaTool[]

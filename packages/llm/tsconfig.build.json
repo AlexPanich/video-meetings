@@ -4,7 +4,7 @@
     "noEmit": false,
     "rootDir": "./src",
     "outDir": "./dist",
-    "customConditions": [],
+    "paths": {},
     "types": ["node"]
   },
   "include": ["src"],
