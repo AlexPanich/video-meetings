@@ -1,28 +1,32 @@
 import { randomUUID } from 'node:crypto'
+import { AbortError } from './abort.js'
+import { assistantMessage, stripThinking, toolUse } from './assistant.js'
+import type { ToolUse } from './assistant.js'
 import { readOllamaConfig } from './config.js'
 import { ContextBudget, ContextOverflowError } from './context.js'
-import { chat, OllamaAbortedError } from './ollama.js'
-import type { OllamaChatResponse, OllamaTool, OllamaToolCall } from './ollama.js'
 import { runHooks } from './hooks.js'
+import { chat, chatStream, OllamaAbortedError } from './ollama.js'
+import type { ChatRequest, OllamaChatResponse, OllamaTool } from './ollama.js'
 import { matchesToolList } from './permissions.js'
-import { hookBase, isRecord } from './session.js'
+import { hookBase } from './session.js'
 import type { QueryState, Session } from './session.js'
+import { StreamTranslator } from './stream-events.js'
+import { retryPrompt, STRUCTURED_OUTPUT_ATTEMPTS, structuredOutput } from './structured.js'
 import { executeTool } from './tool-runner.js'
 import type { ToolOutcome } from './tool-runner.js'
 import { registerTools } from './tools.js'
 import type { RegisteredTool } from './tools.js'
 import type {
-  AssistantMessage,
-  ContentBlock,
   Options,
   PermissionMode,
   Query,
   SDKControlInterruptResponse,
   SDKMessage,
+  SDKPartialAssistantMessage,
   SDKPermissionDenial,
   SDKResultError,
   SDKUserMessage,
-  ToolUseBlock,
+  StreamEvent,
   Usage,
   UserMessageParam,
 } from './types.js'
@@ -37,12 +41,17 @@ export interface QueryParams {
  * пользователя — агентный цикл: `assistant`, при вызовах инструментов — `user` с их результатами
  * и следующий `assistant`, пока модель не ответит без инструментов или не кончатся `maxTurns`;
  * в конце — `result`. Строковый `prompt` — одно сообщение; `AsyncIterable` — цикл на каждое
- * сообщение с общей историей, пока поток не закончится.
+ * сообщение с общей историей, пока поток не закончится. `interrupt()` завершает генератор без
+ * ошибки, `options.abortController` — исключением `AbortError`.
  */
 export function query({ prompt, options = {} }: QueryParams): Query {
+  const controller = new AbortController()
+  const userSignal = options.abortController?.signal
   const state: QueryState = {
     permissionMode: options.permissionMode ?? 'default',
-    controller: new AbortController(),
+    controller,
+    userSignal,
+    signal: userSignal ? AbortSignal.any([controller.signal, userSignal]) : controller.signal,
   }
   const generator = run(prompt, options, state)
 
@@ -58,6 +67,15 @@ export function query({ prompt, options = {} }: QueryParams): Query {
   })
 }
 
+/**
+ * Сессию остановили? Отмена через `abortController` — исключение `AbortError`; `interrupt()` —
+ * `true`, и вызывающий выходит без `result`.
+ */
+function stopped(state: QueryState): boolean {
+  if (state.userSignal?.aborted) throw new AbortError()
+  return state.controller.signal.aborted
+}
+
 async function* run(
   prompt: QueryParams['prompt'],
   options: Options,
@@ -69,6 +87,7 @@ async function* run(
       `Built-in tools are not supported by the local SDK, pass tools: [] (got ${options.tools.join(', ')})`,
     )
   }
+  const structured = structuredOutput(options.outputFormat)
   const tools = availableTools(options)
   const ollamaTools: OllamaTool[] = tools.map((registered) => ({
     type: 'function',
@@ -88,6 +107,7 @@ async function* run(
     context: new ContextBudget(config.numCtx, ollamaTools),
     tools: new Map(tools.map((registered) => [registered.name, registered])),
     ollamaTools,
+    structured,
   }
   const systemPrompt = joinSystemPrompt(options.systemPrompt)
   if (systemPrompt) session.history.push({ role: 'system', content: systemPrompt })
@@ -107,8 +127,9 @@ async function* run(
     session_id: session.id,
   }
 
-  const signal = state.controller.signal
+  const signal = state.signal
   try {
+    if (stopped(state)) return
     await runHooks(
       options.hooks,
       'SessionStart',
@@ -117,11 +138,15 @@ async function* run(
       undefined,
       signal,
     )
-    for await (const userMessage of userTurns(prompt, signal)) {
-      if (signal.aborted) return
+    const turns = { cancelled: false }
+    for await (const userMessage of userTurns(prompt, signal, turns)) {
+      if (stopped(state)) return
       const completed = yield* agentLoop(session, textOf(userMessage))
       if (!completed) return
     }
+    // Ожидание следующего сообщения оборвала отмена: abortController — это ошибка. Отмена после
+    // нормального конца сессии (уже отдан result) — не ошибка.
+    if (turns.cancelled) stopped(state)
   } finally {
     // Сессия кончилась: поток сообщений исчерпан, прервана, упала или вызывающий код вышел из цикла.
     await runHooks(
@@ -130,7 +155,7 @@ async function* run(
       { ...hookBase(session), hook_event_name: 'SessionEnd', reason: 'other' },
       'other',
       undefined,
-      // После interrupt() signal сессии уже сработал, а хуку завершения нужно успеть доработать.
+      // После отмены signal сессии уже сработал, а хуку завершения нужно успеть доработать.
       new AbortController().signal,
     )
   }
@@ -145,10 +170,10 @@ function availableTools(options: Options): RegisteredTool[] {
 
 /**
  * Агентный цикл на одно сообщение пользователя. Возвращает `false`, если сессию прервали
- * (`interrupt()`): тогда `result` не отдаётся.
+ * (`interrupt()`): тогда `result` не отдаётся. Отмена через `abortController` — `AbortError`.
  */
 async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKMessage, boolean> {
-  const { config, state } = session
+  const { config, state, structured } = session
   const startedAt = performance.now()
   let apiMs = 0
   let turns = 0
@@ -165,9 +190,9 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
     { ...hookBase(session), hook_event_name: 'UserPromptSubmit', prompt },
     undefined,
     undefined,
-    state.controller.signal,
+    state.signal,
   )
-  if (state.controller.signal.aborted) return false
+  if (stopped(state)) return false
   session.history.push({ role: 'user', content: prompt })
 
   // Для result: модель из последнего ответа и num_predict последнего запроса.
@@ -197,6 +222,22 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
     uuid: randomUUID(),
     session_id: session.id,
   })
+  const maxTurnsReached = (stopReason: string | null): SDKResultError | undefined => {
+    const maxTurns = session.options.maxTurns
+    if (maxTurns === undefined || turns < maxTurns) return undefined
+    return {
+      ...resultBase(stopReason),
+      subtype: 'error_max_turns',
+      is_error: true,
+      errors: [`Reached maximum number of turns (${maxTurns})`],
+    }
+  }
+
+  // Попытки ответа по схеме на это сообщение. После неудачной следующий запрос — повтор: с
+  // `format` и без инструментов (Ollama ограничивает вывод грамматикой схемы, и вызов
+  // инструмента всё равно невозможен).
+  let structuredAttempts = 0
+  let structuredRetry = false
 
   while (true) {
     const requestStartedAt = performance.now()
@@ -216,25 +257,32 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
       return true
     }
     maxOutputTokens = fitted.numPredict
-    let response: OllamaChatResponse
+    // С инструментами `format` не уходит: грамматика схемы не даёт модели их вызвать.
+    const useFormat = structured && (structuredRetry || session.ollamaTools.length === 0)
+    const request: ChatRequest = {
+      model: session.model,
+      messages: fitted.messages,
+      tools: structuredRetry ? [] : session.ollamaTools,
+      format: useFormat ? structured.schema : undefined,
+      numPredict: fitted.numPredict,
+      signal: state.signal,
+    }
+    const messageId = `msg_${randomUUID()}`
+    let reply: ModelReply
     try {
-      response = await chat(config, {
-        model: session.model,
-        messages: fitted.messages,
-        tools: session.ollamaTools,
-        numPredict: fitted.numPredict,
-        signal: state.controller.signal,
-      })
+      reply = yield* callModel(session, request, messageId)
     } catch (error) {
-      if (error instanceof OllamaAbortedError) return false
+      if (error instanceof OllamaAbortedError && stopped(state)) return false
       throw error
     }
+    // interrupt() во время отдачи последних stream_event: полного ответа уже не будет.
+    if (stopped(state)) return false
+    const { response, calls } = reply
     session.context.calibrate(fitted.messages, response.prompt_eval_count)
     apiMs += performance.now() - requestStartedAt
     turns += 1
 
-    const text = stripThinking(response.message.content)
-    const calls = (response.message.tool_calls ?? []).map(toolUse)
+    const text = stripThinking(reply.raw)
     session.history.push({
       role: 'assistant',
       content: text,
@@ -242,6 +290,7 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
     })
     const message = assistantMessage(
       response,
+      messageId,
       session.model,
       text,
       calls.map((call) => call.block),
@@ -257,6 +306,33 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
     }
 
     if (calls.length === 0) {
+      const checked = structured?.check(text)
+      if (checked && !checked.ok) {
+        structuredAttempts += 1
+        if (structuredAttempts >= STRUCTURED_OUTPUT_ATTEMPTS) {
+          const exhausted: SDKResultError = {
+            ...resultBase(message.stop_reason),
+            subtype: 'error_during_execution',
+            is_error: true,
+            errors: [
+              `Model did not return output matching the JSON schema after ${structuredAttempts} attempts. ${checked.error}`,
+            ],
+          }
+          yield exhausted
+          return true
+        }
+        const limit = maxTurnsReached(message.stop_reason)
+        if (limit) {
+          yield limit
+          return true
+        }
+        session.history.push({
+          role: 'user',
+          content: retryPrompt(checked.error, message.stop_reason === 'max_tokens'),
+        })
+        structuredRetry = true
+        continue
+      }
       await runHooks(
         session.options.hooks,
         'Stop',
@@ -268,13 +344,14 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
         },
         undefined,
         undefined,
-        state.controller.signal,
+        state.signal,
       )
-      if (state.controller.signal.aborted) return false
+      if (stopped(state)) return false
       yield {
         ...resultBase(message.stop_reason),
         subtype: 'success' as const,
         result: text,
+        ...(checked ? { structured_output: checked.value } : {}),
         is_error: false,
       }
       return true
@@ -282,11 +359,11 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
 
     const results: ToolOutcome[] = []
     for (const call of calls) {
-      // interrupt() между сообщениями: инструменты (и их побочные эффекты) уже не выполняются.
-      if (state.controller.signal.aborted) return false
+      // Отмена между вызовами: инструменты (и их побочные эффекты) уже не выполняются.
+      if (stopped(state)) return false
       results.push(await executeTool(session, call.block, denials))
     }
-    if (state.controller.signal.aborted) return false
+    if (stopped(state)) return false
     for (const [index, outcome] of results.entries()) {
       session.history.push({
         role: 'tool',
@@ -311,36 +388,62 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
       session_id: session.id,
     }
 
-    const maxTurns = session.options.maxTurns
-    if (maxTurns !== undefined && turns >= maxTurns) {
-      yield {
-        ...resultBase(message.stop_reason),
-        subtype: 'error_max_turns' as const,
-        is_error: true,
-        errors: [`Reached maximum number of turns (${maxTurns})`],
-      }
+    const limit = maxTurnsReached(message.stop_reason)
+    if (limit) {
+      yield limit
       return true
     }
   }
 }
 
-/** Вызов инструмента из ответа Ollama: блок `tool_use` с новым id и вызов для истории. */
-function toolUse(call: OllamaToolCall): { block: ToolUseBlock; ollama: OllamaToolCall } {
-  const input = parseArguments(call.function.arguments)
+interface ModelReply {
+  /** Ответ Ollama (для потока — последний чанк с моделью из первого): счётчики, причина остановки. */
+  response: OllamaChatResponse
+  /** Текст ответа как есть, с рассуждением. */
+  raw: string
+  calls: ToolUse[]
+}
+
+/**
+ * Один запрос к модели. С `includePartialMessages` — потоком: по ходу отдаются `stream_event`,
+ * id сообщения в них — `messageId` будущего `assistant`.
+ */
+async function* callModel(
+  session: Session,
+  request: ChatRequest,
+  messageId: string,
+): AsyncGenerator<SDKPartialAssistantMessage, ModelReply> {
+  if (!session.options.includePartialMessages) {
+    const response = await chat(session.config, request)
+    return {
+      response,
+      raw: response.message.content,
+      calls: (response.message.tool_calls ?? []).map(toolUse),
+    }
+  }
+  const translator = new StreamTranslator(messageId, session.model)
+  let last: OllamaChatResponse | undefined
+  for await (const chunk of chatStream(session.config, request)) {
+    for (const event of translator.push(chunk)) yield partial(session, event)
+    last = chunk
+  }
+  // chatStream без `done` бросает: сюда доходит только полный ответ.
+  if (!last) throw new Error('Ollama stream ended before the response was complete')
+  for (const event of translator.finish(last)) yield partial(session, event)
   return {
-    block: { type: 'tool_use', id: `toolu_${randomUUID()}`, name: call.function.name, input },
-    ollama: { function: { name: call.function.name, arguments: input } },
+    response: { ...last, model: translator.model },
+    raw: translator.raw,
+    calls: translator.calls,
   }
 }
 
-/** Аргументы-строка разбираются как JSON; не объект — пустой объект (схема его отклонит). */
-function parseArguments(raw: OllamaToolCall['function']['arguments']): Record<string, unknown> {
-  if (typeof raw !== 'string') return raw
-  try {
-    const value: unknown = JSON.parse(raw)
-    return isRecord(value) ? value : {}
-  } catch {
-    return {}
+function partial(session: Session, event: StreamEvent): SDKPartialAssistantMessage {
+  return {
+    type: 'stream_event',
+    event,
+    parent_tool_use_id: null,
+    uuid: randomUUID(),
+    session_id: session.id,
   }
 }
 
@@ -349,10 +452,11 @@ function addUsage(total: Usage, turn: Usage): void {
   total.output_tokens += turn.output_tokens
 }
 
-/** Сообщения пользователя; ожидание следующего обрывается `interrupt()`. */
+/** Сообщения пользователя; ожидание следующего обрывается отменой (`turns.cancelled`). */
 async function* userTurns(
   prompt: QueryParams['prompt'],
   signal: AbortSignal,
+  turns: { cancelled: boolean },
 ): AsyncGenerator<UserMessageParam> {
   if (typeof prompt === 'string') {
     yield { role: 'user', content: prompt }
@@ -366,7 +470,11 @@ async function* userTurns(
   try {
     while (true) {
       const next = await Promise.race([iterator.next(), aborted])
-      if (next === null || next.done) return
+      if (next === null) {
+        turns.cancelled = true
+        return
+      }
+      if (next.done) return
       yield next.value.message
     }
   } finally {
@@ -385,44 +493,4 @@ function textOf(message: UserMessageParam): string {
 function joinSystemPrompt(systemPrompt: Options['systemPrompt']): string {
   if (systemPrompt === undefined) return ''
   return typeof systemPrompt === 'string' ? systemPrompt : systemPrompt.join('\n\n')
-}
-
-/**
- * Qwen3 может вернуть рассуждение `<think>…</think>` в начале текста. Если ответ оборван внутри
- * рассуждения (нет `</think>`), отрезается всё: рассуждение не выдаётся за ответ.
- */
-function stripThinking(content: string): string {
-  return content.replace(/^\s*<think>[\s\S]*?(<\/think>\s*|$)/, '')
-}
-
-function assistantMessage(
-  response: OllamaChatResponse,
-  requestedModel: string,
-  text: string,
-  toolUses: ToolUseBlock[],
-): AssistantMessage {
-  const usage: Usage = {
-    input_tokens: response.prompt_eval_count ?? 0,
-    output_tokens: response.eval_count ?? 0,
-    cache_creation_input_tokens: 0,
-    cache_read_input_tokens: 0,
-  }
-  // Без вызовов текстовый блок есть всегда (даже пустой), как в фазе 1; с вызовами — если есть текст.
-  const content: ContentBlock[] =
-    toolUses.length === 0 || text !== '' ? [{ type: 'text', text }, ...toolUses] : toolUses
-  return {
-    id: `msg_${randomUUID()}`,
-    type: 'message',
-    role: 'assistant',
-    model: response.model || requestedModel,
-    content,
-    stop_reason:
-      toolUses.length > 0
-        ? 'tool_use'
-        : response.done_reason === 'length'
-          ? 'max_tokens'
-          : 'end_turn',
-    stop_sequence: null,
-    usage,
-  }
 }

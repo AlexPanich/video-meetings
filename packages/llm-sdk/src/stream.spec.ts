@@ -150,7 +150,7 @@ describe('includePartialMessages: stream_event', () => {
       expect(message).toMatchObject({
         session_id: init.session_id,
         parent_tool_use_id: null,
-        uuid: expect.any(String),
+        uuid: expect.any(String) as unknown,
       })
     }
   })

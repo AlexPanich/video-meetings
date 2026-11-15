@@ -1,4 +1,13 @@
-// Ожидание чужого кода (обработчики, хуки, canUseTool) с отменой через `interrupt()`.
+// Отмена: ошибка `AbortError` и ожидание чужого кода (обработчики, хуки, canUseTool) с отменой
+// через `interrupt()` и `options.abortController`.
+
+/** Сессию отменили через `options.abortController` (как `AbortError` оригинала). */
+export class AbortError extends Error {
+  constructor(message = 'Query was aborted by the abortController') {
+    super(message)
+    this.name = 'AbortError'
+  }
+}
 
 /**
  * Ждёт `promise`, но не дольше срабатывания `signal`: после отмены отклоняется с

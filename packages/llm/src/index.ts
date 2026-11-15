@@ -13,16 +13,19 @@ export type {
   HookEvent,
   HookInput,
   HookJSONOutput,
+  JsonSchemaOutputFormat,
   McpSdkServerConfigWithInstance,
   McpServerConfig,
   OtherContentBlock,
   Options,
+  OutputFormat,
   PermissionMode,
   PermissionResult,
   Query,
   SDKAssistantMessage,
   SDKControlInterruptResponse,
   SDKMessage,
+  SDKPartialAssistantMessage,
   SDKPermissionDenial,
   SDKResultError,
   SDKResultMessage,
@@ -30,6 +33,7 @@ export type {
   SDKSystemMessage,
   SDKUserMessage,
   SdkMcpToolDefinition,
+  StreamEvent,
   TextBlock,
   ToolUseBlock,
 } from '@video-meetings/llm-sdk'
@@ -45,6 +49,7 @@ export function resolveProvider(value: string | undefined): LlmProvider {
 
 /** Набор функций, общий для обеих реализаций. Типы — локального SDK, они повторяют оригинал. */
 interface Sdk {
+  AbortError: typeof LocalSdk.AbortError
   query: typeof LocalSdk.query
   tool: typeof LocalSdk.tool
   createSdkMcpServer: typeof LocalSdk.createSdkMcpServer
@@ -63,6 +68,8 @@ export const provider: LlmProvider = resolveProvider(process.env.LLM_PROVIDER)
 
 const sdk = await loadSdk(provider)
 
+/** Ошибка отмены через `options.abortController` (проверка — `instanceof AbortError`). */
+export const AbortError = sdk.AbortError
 export const query = sdk.query
 export const tool = sdk.tool
 export const createSdkMcpServer = sdk.createSdkMcpServer

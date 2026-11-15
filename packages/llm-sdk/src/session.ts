@@ -2,13 +2,19 @@
 import type { OllamaConfig } from './config.js'
 import type { ContextBudget } from './context.js'
 import type { OllamaMessage, OllamaTool } from './ollama.js'
+import type { StructuredOutput } from './structured.js'
 import type { RegisteredTool } from './tools.js'
 import type { BaseHookInput, Options, PermissionMode } from './types.js'
 
 /** Изменяемое состояние, к которому есть доступ у методов `Query`. */
 export interface QueryState {
   permissionMode: PermissionMode
+  /** `interrupt()`: генератор завершается без ошибки. */
   controller: AbortController
+  /** `options.abortController` вызывающего кода: генератор бросает `AbortError`. */
+  userSignal?: AbortSignal
+  /** Срабатывает от любого из двух: его получают запросы к Ollama, хуки и инструменты. */
+  signal: AbortSignal
 }
 
 export interface Session {
@@ -22,6 +28,8 @@ export interface Session {
   context: ContextBudget
   tools: Map<string, RegisteredTool>
   ollamaTools: OllamaTool[]
+  /** Проверка финального ответа по `outputFormat`; без него — `undefined`. */
+  structured?: StructuredOutput
 }
 
 /** Общие поля входа хуков. */

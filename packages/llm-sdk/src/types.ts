@@ -3,6 +3,7 @@
 // оригиналом, чтобы код фич компилировался с обеими реализациями (см. packages/llm/test/compat).
 import type { UUID } from 'node:crypto'
 import type { MessageParam } from '@anthropic-ai/sdk/resources'
+import type { BetaRawMessageStreamEvent } from '@anthropic-ai/sdk/resources/beta/messages/messages'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js'
 import type { ZodRawShape as ZodRawShapeV3 } from 'zod/v3'
@@ -159,9 +160,15 @@ interface SDKResultBase {
 export interface SDKResultSuccess extends SDKResultBase {
   subtype: 'success'
   result: string
+  /** Ответ, разобранный и проверенный по `outputFormat`; без `outputFormat` поля нет. */
+  structured_output?: unknown
 }
 
 export interface SDKResultError extends SDKResultBase {
+  /**
+   * Исчерпанные повторы `outputFormat` локально — `error_during_execution`
+   * (`error_max_structured_output_retries` — только из оригинала).
+   */
   subtype:
     | 'error_during_execution'
     | 'error_max_turns'
@@ -172,7 +179,35 @@ export interface SDKResultError extends SDKResultBase {
 
 export type SDKResultMessage = SDKResultSuccess | SDKResultError
 
-export type SDKMessage = SDKSystemMessage | SDKUserMessage | SDKAssistantMessage | SDKResultMessage
+/** Событие потокового ответа (`includePartialMessages`) в формате Messages API. */
+export type StreamEvent = BetaRawMessageStreamEvent
+
+/**
+ * Часть генерируемого ответа при `includePartialMessages`: `message_start`, `content_block_*`,
+ * `message_delta`, `message_stop`. Полное сообщение `assistant` идёт следом.
+ */
+export interface SDKPartialAssistantMessage {
+  type: 'stream_event'
+  event: StreamEvent
+  parent_tool_use_id: string | null
+  uuid: UUID
+  session_id: string
+}
+
+export type SDKMessage =
+  | SDKSystemMessage
+  | SDKUserMessage
+  | SDKAssistantMessage
+  | SDKPartialAssistantMessage
+  | SDKResultMessage
+
+/** Структурированный ответ по JSON Schema (`options.outputFormat`). */
+export interface JsonSchemaOutputFormat {
+  type: 'json_schema'
+  schema: Record<string, unknown>
+}
+
+export type OutputFormat = JsonSchemaOutputFormat
 
 // --- SDK-инструменты (in-process MCP) ---
 
@@ -376,7 +411,7 @@ export interface HookCallbackMatcher {
 
 /**
  * Опции `query()`. Подмножество опций оригинала: модель, системный промпт, SDK-инструменты,
- * права, хуки и лимит ходов.
+ * права, хуки, лимит ходов, структурированный ответ, стриминг и отмена.
  */
 export interface Options {
   /** Модель Ollama, перекрывает `OLLAMA_MODEL`. */
@@ -402,6 +437,16 @@ export interface Options {
   /** Решает за инструменты вне `allowedTools`; без него такие вызовы отклоняются. */
   canUseTool?: CanUseTool
   hooks?: Partial<Record<HookEvent, HookCallbackMatcher[]>>
+  /**
+   * Финальный ответ — JSON по схеме: уходит в Ollama как `format`, проверяется, при ошибке
+   * модель получает её описание и отвечает заново (всего 3 попытки, затем
+   * `error_during_execution`). Результат — `structured_output` в `result/success`.
+   */
+  outputFormat?: OutputFormat
+  /** Отдавать `stream_event` по ходу генерации (запрос к Ollama идёт потоком). */
+  includePartialMessages?: boolean
+  /** Отмена сессии: обрывает текущий запрос к Ollama, генератор бросает `AbortError`. */
+  abortController?: AbortController
 }
 
 /**

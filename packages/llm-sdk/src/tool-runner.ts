@@ -27,7 +27,7 @@ export async function executeTool(
   const registered = session.tools.get(call.name)
   if (!registered) return toolError(`No such tool available: ${call.name}`)
   const { options, state } = session
-  const signal = state.controller.signal
+  const signal = state.signal
   const input = isRecord(call.input) ? call.input : {}
 
   const hookOutputs = await runHooks(
