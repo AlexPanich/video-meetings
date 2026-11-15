@@ -126,7 +126,7 @@ WHISPER_LANGUAGE=ru
 - [ ] `packages/llm-sdk` собирается, подключён в workspace, `pnpm build`, `pnpm lint` и `pnpm test` проходят из корня.
 - [ ] Один и тот же код фичи (`query` + `tool` + `createSdkMcpServer` + `outputFormat`) проходит `tsc` с обоими провайдерами без приведений типов.
 - [ ] Против живой Ollama + Qwen контрактный набор проходит: простой ответ, вызов SDK-инструмента и результат, `maxTurns` → `error_max_turns`, `structured_output` по схеме, `interrupt()`/`abortController` останавливает генерацию, `resume` продолжает сессию с контекстом, `forkSession` не меняет исходную сессию, хук `PreToolUse` с deny блокирует инструмент, `canUseTool` с deny блокирует инструмент, `includePartialMessages` даёт `stream_event`, внешний stdio-MCP-сервер вызывается.
-- [ ] Тот же набор проходит против `@anthropic-ai/claude-agent-sdk` при ручном запуске с ключом.
+- [ ] Тот же набор проходит против `@anthropic-ai/claude-agent-sdk` при ручном запуске с ключом. Отложено до появления ключа: #155, вне SDK-фаз.
 - [ ] При `LLM_PROVIDER=local` не уходит ни одного запроса на домены Anthropic (проверено тестом с перехватом сети).
 - [ ] Переключение на Anthropic делается только сменой env, без изменений кода.
 - [ ] Владелец встречи запускает саммари, статус проходит этапы до `done`, на странице видны резюме, решения, задачи и открытые вопросы.
