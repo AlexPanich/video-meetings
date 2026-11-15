@@ -60,3 +60,18 @@ export type OutputFormatToAnthropic = Assert<
 export type AbortErrorFromAnthropic = Assert<
   Assignable<typeof Anthropic.AbortError, typeof Local.AbortError>
 >
+
+// Фаза 4: хранилище сессий в обе стороны, опции сессий и конфиги внешних MCP-серверов.
+export type SessionStoreToAnthropic = Assert<Assignable<Local.SessionStore, Anthropic.SessionStore>>
+export type SessionStoreFromAnthropic = Assert<
+  Assignable<Anthropic.SessionStore, Local.SessionStore>
+>
+export type InMemoryStoreFromAnthropic = Assert<
+  Assignable<
+    InstanceType<typeof Anthropic.InMemorySessionStore>,
+    Pick<Local.InMemorySessionStore, keyof Local.SessionStore>
+  >
+>
+export type McpServerConfigToAnthropic = Assert<
+  Assignable<Local.McpServerConfig, NonNullable<Anthropic.Options['mcpServers']>[string]>
+>

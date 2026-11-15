@@ -34,6 +34,9 @@
   по `subtype !== 'success'`: локальный и оригинальный SDK называют ошибку повторов по-разному.
 - **Отмена — `AbortError` из фасада.** Ловите `error instanceof AbortError`; после `interrupt()`
   не ждите ни `result`, ни его отсутствия (см. «Отличия от оригинала»).
+- **Сессии между процессами — только через свой `sessionStore`.** Локально хранилище по умолчанию
+  живёт в памяти процесса, оригинал пишет на диск: `resume` после перезапуска работает лишь с
+  хранилищем, которое фича передаёт сама (см. «Сессии»).
 
 ## Что умеет (фаза 1)
 
@@ -120,9 +123,65 @@ for await (const message of query({
 - Обработчик получает вторым аргументом `{ signal }` — срабатывает при `interrupt()` и
   `abortController.abort()`. После отмены следующие вызовы ответа не выполняются, сессия кончается
   без `result`.
-- В `mcpServers` принимаются только серверы из `createSdkMcpServer()` этого пакета (через фасад
-  так и есть); `stdio`/`http`/`sse` и чужой `McpServer` — ошибка (внешние серверы — фаза 4).
-  Обработчики вызываются напрямую, без MCP-транспорта.
+- SDK-серверы — только из `createSdkMcpServer()` этого пакета (через фасад так и есть), чужой
+  `McpServer` — ошибка. Их обработчики вызываются напрямую, без MCP-транспорта. Внешние серверы
+  (`stdio`, `http`, `sse`) — см. «Внешние MCP-серверы».
+
+## Внешние MCP-серверы (фаза 4)
+
+```ts
+const servers: Record<string, McpServerConfig> = {
+  files: { type: 'stdio', command: 'node', args: ['server.mjs'], env: { ROOT: '/data' } },
+  remote: { type: 'http', url: 'https://mcp.example/mcp', headers: { Authorization: 'Bearer …' } },
+  legacy: { type: 'sse', url: 'https://old.example/sse' },
+}
+query({ prompt, options: { tools: [], mcpServers: servers, allowedTools: ['mcp__files'] } })
+```
+
+- Клиент — `@modelcontextprotocol/sdk`: `stdio` запускает процесс (`type` можно не указывать),
+  `http` — Streamable HTTP, `sse` — устаревший HTTP+SSE; `headers` уходят в каждый запрос.
+  `env` добавляется к безопасному набору переменных (`HOME`, `PATH`, `SHELL`, `TERM`, `USER`,
+  `LOGNAME`), а не ко всему окружению процесса; stderr сервера отбрасывается.
+- Серверы подключаются параллельно при первом `next()`, до `system/init`; инструменты берутся из
+  `tools/list` (JSON Schema уходит модели как есть). Имена, права, хуки и ошибки — как у
+  SDK-инструментов; аргументы проверяет сам сервер, его `isError` — `tool_result` с `is_error`.
+  `timeout` конфига — таймаут вызова, мс (по умолчанию — 60 с MCP SDK).
+- Не подключился за 30 с (нет программы, сервер недоступен, ошибка протокола) — `status: 'failed'`
+  в `mcp_servers` `system/init`, сессия идёт без его инструментов.
+- Сессия кончилась любым способом (`result`, `break`, `interrupt()`, `abortController`,
+  исключение) — клиенты закрываются, процесс stdio-сервера завершается (SIGTERM, затем SIGKILL).
+
+## Сессии (фаза 4)
+
+```ts
+const store = new InMemorySessionStore() // или своё хранилище: SessionStore
+const first = await run('Запомни ЛИМОН-42', { sessionStore: store })
+await run('Какое слово?', { sessionStore: store, resume: first.sessionId })
+await run('Теперь ГРУША-7', { sessionStore: store, resume: first.sessionId, forkSession: true })
+await run('Продолжим', { sessionStore: store, continue: true }) // последняя по mtime
+```
+
+- `resume: <id>` — модель получает историю сессии (сообщения, вызовы инструментов и их
+  результаты), `session_id` сообщений тот же. Неизвестный id — исключение
+  `No conversation found with session ID: <id>` до запросов к модели.
+- `continue: true` — последняя сессия хранилища по `mtime` (`listSessions()` обязателен, иначе
+  исключение); нет сессий — новая. При `resume` `continue` не действует.
+- `forkSession: true` вместе с `resume`/`continue` — новый `session_id`, история копируется в
+  новую сессию, исходная не меняется.
+- Системный промпт и остальные опции берутся из нового `query()`: в хранилище пишется только
+  история. Хук `SessionStart` при продолжении получает `source: 'resume'`.
+- Новые сообщения хода дописываются в `append()` перед каждым `result` (поэтому `break` на
+  `result` ход не теряет); ошибка `append()` — исключение из генератора. Ход, прерванный
+  `interrupt()`, `abortController` или ошибкой Ollama, не сохраняется: в хранилище нет
+  полуоконченных обменов. Ответвление, в котором не было ни одного хода, не создаётся.
+- Записи — `{ type: 'ollama_message', uuid, timestamp, session_id, message }`, ключ —
+  `{ projectKey: <cwd, не буквы и цифры заменены на '-'>, sessionId }`; записи других типов при
+  загрузке пропускаются. Два одновременных `query()` с `resume` одного id пишут в один ключ
+  вперемешку — продолжайте сессию по очереди или ответвляйте (`forkSession`).
+- Без `sessionStore` — общее на процесс хранилище в памяти на последние 100 сессий (старые
+  вытесняются): сессии не переживают перезапуск. Для продолжения между процессами передайте своё
+  хранилище (`append`, `load`, `listSessions`), например в БД. `InMemorySessionStore` (экспорт
+  пакета и фасада) не ограничен по размеру — для тестов и разработки.
 
 ## Права
 
@@ -160,7 +219,7 @@ for await (const message of query({
 
 | Событие            | Когда                                                | matcher по        |
 | ------------------ | ---------------------------------------------------- | ----------------- |
-| `SessionStart`     | после `system/init`; `source` всегда `startup`       | `source`          |
+| `SessionStart`     | после `system/init`; `source` — `startup`/`resume`   | `source`          |
 | `UserPromptSubmit` | перед каждым сообщением пользователя (`prompt`)      | —                 |
 | `PreToolUse`       | перед проверкой прав каждого вызова                  | имени инструмента |
 | `PostToolUse`      | после успешного обработчика (`tool_response`)        | имени инструмента |
@@ -306,8 +365,7 @@ complete`), чанк `{ error }` (`Ollama failed: …`), строка не JSON 
 - Вызовы из одного ответа модели выполняются по очереди, а не параллельно.
 - Права: нет шаблонов с аргументами в `allowedTools`, нет интерактивного `ask`, `acceptEdits`/
   `auto` равны `default`.
-- Только SDK-серверы в `mcpServers`, без MCP-транспорта; `alwaysLoad`/`searchHint` у `tool()`
-  игнорируются.
+- SDK-серверы вызываются без MCP-транспорта; `alwaysLoad`/`searchHint` у `tool()` игнорируются.
 - Качество вызова инструментов зависит от Qwen: модель может назвать несуществующий инструмент
   или передать аргументы не по схеме — это уходит ей ошибкой, и она обычно исправляется на
   следующем ходу. Держите `maxTurns`.
@@ -324,6 +382,17 @@ complete`), чанк `{ error }` (`Ollama failed: …`), строка не JSON 
   вызова инструмента, порядок блоков в событиях и в полном `assistant` разойдётся (Qwen
   присылает вызовы в конце ответа, на практике порядок совпадает).
 - Типы: `outputFormat` — только `json_schema`; `structured_output` — `unknown`, как в оригинале.
+
+Фаза 4:
+
+- Хранилище по умолчанию — в памяти процесса, оригинал пишет транскрипт на диск
+  (`~/.claude/projects`) и зеркалит в `sessionStore`. Формат записей свой: сессию локального SDK
+  не продолжить в оригинале и наоборот.
+- Нет `sessionId`, `resumeSessionAt`, `persistSession`, `sessionStoreFlush`, `loadTimeoutMs` и
+  функций `listSessions()`/`getSessionMessages()`/`forkSession()` уровня модуля; `forkSession` при
+  продолжении даёт `SessionStart` с `source: 'resume'`.
+- Внешние MCP: нет `tools` (политик инструментов) и `alwaysLoad` в конфиге, ресурсов и промптов
+  MCP, переподключения упавшего сервера; ждёт подключения всех серверов до `system/init`.
 
 ## Настройки (env)
 
@@ -371,5 +440,5 @@ Ollama (JSON и NDJSON-поток; запросы на loopback пропуска
 случайным портом и путь к stdio-серверу `fixtures/echo-mcp-server.mjs` (отдельный процесс `node`).
 Сеть и Ollama тестам не нужны.
 
-В `exports` есть условие `source` → `src/index.ts`: тесты и линт фасада работают с исходниками
-без сборки. Контрактный набор против живой модели — в [`packages/llm`](../llm/README.md).
+В `exports` есть условие `source` → `src/index.ts`; фасад берёт исходники через `paths` в своём
+`tsconfig.json` и alias в `vitest.config.ts`, поэтому тесты и линт работают без сборки. Контрактный набор против живой модели — в [`packages/llm`](../llm/README.md).

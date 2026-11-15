@@ -29,9 +29,13 @@ interface CompiledTool {
   description: string
   /** JSON Schema аргументов для tool calling Ollama. */
   parameters: Record<string, unknown>
-  schema: z.ZodType<Record<string, unknown>>
+  /** Проверка аргументов перед вызовом; ошибка уходит модели. */
+  validate: (input: Record<string, unknown>) => ToolInputCheck
   handler: (args: Record<string, unknown>, extra: unknown) => Promise<CallToolResult>
 }
+
+export type ToolInputCheck =
+  { success: true; data: Record<string, unknown> } | { success: false; message: string }
 
 /** Инструменты серверов, созданных этим пакетом (по экземпляру `McpServer`). */
 const serverTools = new WeakMap<McpServer, CompiledTool[]>()
@@ -71,7 +75,12 @@ export function createSdkMcpServer(
       name: definition.name,
       description: definition.description,
       parameters,
-      schema,
+      validate: (input) => {
+        const parsed = schema.safeParse(input)
+        return parsed.success
+          ? { success: true, data: parsed.data }
+          : { success: false, message: parsed.error.message }
+      },
       handler: definition.handler,
     })
   }
@@ -86,11 +95,15 @@ export interface RegisteredTool extends CompiledTool {
   server: string
 }
 
-/** Собирает инструменты всех серверов `options.mcpServers`; ключ записи — имя сервера. */
+/**
+ * Собирает инструменты SDK-серверов `options.mcpServers`; ключ записи — имя сервера. Внешние
+ * серверы (`stdio`, `http`, `sse`) подключает `ExternalServers` (`mcp-clients.ts`).
+ */
 export function registerTools(servers: Record<string, McpServerConfig> = {}): RegisteredTool[] {
   const registered: RegisteredTool[] = []
   for (const [server, config] of Object.entries(servers)) {
-    const tools = config.type === 'sdk' ? serverTools.get(config.instance) : undefined
+    if (config.type !== 'sdk') continue
+    const tools = serverTools.get(config.instance)
     if (!tools) {
       throw new Error(
         `MCP server "${server}" is not supported by the local SDK: only servers from createSdkMcpServer() of @video-meetings/llm-sdk`,

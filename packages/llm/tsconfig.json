@@ -9,9 +9,15 @@
     "sourceMap": true,
     "skipLibCheck": true,
     "noEmit": true,
-    // Исходники @video-meetings/llm-sdk (условие `source` в его exports): тесты и линт
-    // не требуют предварительной сборки. Сборка пакета берёт dist (см. tsconfig.build.json).
-    "customConditions": ["source"],
+    // Исходники @video-meetings/llm-sdk: тесты и линт не требуют предварительной сборки. Сборка
+    // пакета берёт dist (см. tsconfig.build.json). Не `customConditions: ["source"]`: условие
+    // действует на все пакеты, и сторонние с `source` в exports (eventsource) подтянули бы
+    // свои .ts на проверку.
+    // Самоссылка `@video-meetings/llm` в test/ — тоже на исходники, а не на dist.
+    "paths": {
+      "@video-meetings/llm": ["./src/index.ts"],
+      "@video-meetings/llm-sdk": ["../llm-sdk/src/index.ts"]
+    },
     "types": ["vitest/globals", "node"]
   },
   "include": ["src", "test", "vitest.config.ts", "vitest.config.contract.ts"]

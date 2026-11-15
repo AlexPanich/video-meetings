@@ -3,13 +3,17 @@ import { AbortError } from './abort.js'
 import { assistantMessage, stripThinking, toolUse } from './assistant.js'
 import type { ToolUse } from './assistant.js'
 import { readOllamaConfig } from './config.js'
+import type { OllamaConfig } from './config.js'
 import { ContextBudget, ContextOverflowError } from './context.js'
 import { runHooks } from './hooks.js'
+import { ExternalServers } from './mcp-clients.js'
 import { chat, chatStream, OllamaAbortedError } from './ollama.js'
 import type { ChatRequest, OllamaChatResponse, OllamaTool } from './ollama.js'
 import { matchesToolList } from './permissions.js'
 import { hookBase } from './session.js'
 import type { QueryState, Session } from './session.js'
+import { openSession, persistSession } from './sessions.js'
+import type { SessionLink } from './sessions.js'
 import { StreamTranslator } from './stream-events.js'
 import {
   retryPrompt,
@@ -17,6 +21,7 @@ import {
   structuredInstruction,
   structuredOutput,
 } from './structured.js'
+import type { StructuredOutput } from './structured.js'
 import { executeTool } from './tool-runner.js'
 import type { ToolOutcome } from './tool-runner.js'
 import { registerTools } from './tools.js'
@@ -93,7 +98,26 @@ async function* run(
     )
   }
   const structured = structuredOutput(options.outputFormat)
-  const tools = availableTools(options)
+  // Неизвестный resume — ошибка до подключения серверов и запросов к модели.
+  const link = await openSession(options)
+  const external = await ExternalServers.connect(options.mcpServers, state.signal)
+  try {
+    yield* runSession(prompt, options, state, config, structured, link, external)
+  } finally {
+    await external.close()
+  }
+}
+
+async function* runSession(
+  prompt: QueryParams['prompt'],
+  options: Options,
+  state: QueryState,
+  config: OllamaConfig,
+  structured: StructuredOutput | undefined,
+  link: SessionLink,
+  external: ExternalServers,
+): AsyncGenerator<SDKMessage, void> {
+  const tools = availableTools(options, external)
   const ollamaTools: OllamaTool[] = tools.map((registered) => ({
     type: 'function',
     function: {
@@ -103,12 +127,14 @@ async function* run(
     },
   }))
   const session: Session = {
-    id: randomUUID(),
+    id: link.id,
     config,
     model: options.model ?? config.model,
     options,
     state,
-    history: [],
+    history: link.history,
+    // До `result`: вызывающий код часто выходит из цикла сразу на нём.
+    persist: () => persistSession(link),
     context: new ContextBudget(config.numCtx, ollamaTools),
     tools: new Map(tools.map((registered) => [registered.name, registered])),
     ollamaTools,
@@ -120,7 +146,9 @@ async function* run(
   ]
     .filter((part) => part !== '')
     .join('\n\n')
-  if (systemPrompt) session.history.push({ role: 'system', content: systemPrompt })
+  // Системный промпт — из этого query(): в хранилище он не пишется и при resume не дублируется.
+  if (systemPrompt) session.history.unshift({ role: 'system', content: systemPrompt })
+  const source = link.resumed ? 'resume' : 'startup'
 
   yield {
     type: 'system',
@@ -129,7 +157,7 @@ async function* run(
     tools: tools.map((registered) => registered.name),
     mcp_servers: Object.keys(options.mcpServers ?? {}).map((name) => ({
       name,
-      status: 'connected',
+      status: external.status(name) ?? 'connected',
     })),
     model: session.model,
     permissionMode: state.permissionMode,
@@ -143,8 +171,8 @@ async function* run(
     await runHooks(
       options.hooks,
       'SessionStart',
-      { ...hookBase(session), hook_event_name: 'SessionStart', source: 'startup' },
-      'startup',
+      { ...hookBase(session), hook_event_name: 'SessionStart', source },
+      source,
       undefined,
       signal,
     )
@@ -171,9 +199,9 @@ async function* run(
   }
 }
 
-/** Инструменты SDK-серверов без `disallowedTools`: запрещённые модель не видит. */
-function availableTools(options: Options): RegisteredTool[] {
-  return registerTools(options.mcpServers).filter(
+/** Инструменты SDK- и внешних серверов без `disallowedTools`: запрещённые модель не видит. */
+function availableTools(options: Options, external: ExternalServers): RegisteredTool[] {
+  return [...registerTools(options.mcpServers), ...external.tools()].filter(
     (registered) => !matchesToolList(registered, options.disallowedTools),
   )
 }
@@ -263,6 +291,7 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
         is_error: true,
         errors: [error.message],
       }
+      await session.persist()
       yield overflow
       return true
     }
@@ -328,11 +357,13 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
               `Model did not return output matching the JSON schema after ${structuredAttempts} attempts. ${checked.error}`,
             ],
           }
+          await session.persist()
           yield exhausted
           return true
         }
         const limit = maxTurnsReached(message.stop_reason)
         if (limit) {
+          await session.persist()
           yield limit
           return true
         }
@@ -357,6 +388,7 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
         state.signal,
       )
       if (stopped(state)) return false
+      await session.persist()
       yield {
         ...resultBase(message.stop_reason),
         subtype: 'success' as const,
@@ -400,6 +432,7 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
 
     const limit = maxTurnsReached(message.stop_reason)
     if (limit) {
+      await session.persist()
       yield limit
       return true
     }

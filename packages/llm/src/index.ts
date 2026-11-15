@@ -14,8 +14,11 @@ export type {
   HookInput,
   HookJSONOutput,
   JsonSchemaOutputFormat,
+  McpHttpServerConfig,
   McpSdkServerConfigWithInstance,
   McpServerConfig,
+  McpSSEServerConfig,
+  McpStdioServerConfig,
   OtherContentBlock,
   Options,
   OutputFormat,
@@ -33,6 +36,9 @@ export type {
   SDKSystemMessage,
   SDKUserMessage,
   SdkMcpToolDefinition,
+  SessionKey,
+  SessionStore,
+  SessionStoreEntry,
   StreamEvent,
   TextBlock,
   ToolUseBlock,
@@ -53,6 +59,7 @@ interface Sdk {
   query: typeof LocalSdk.query
   tool: typeof LocalSdk.tool
   createSdkMcpServer: typeof LocalSdk.createSdkMcpServer
+  InMemorySessionStore: typeof LocalSdk.InMemorySessionStore
 }
 
 async function loadSdk(provider: LlmProvider): Promise<Sdk> {
@@ -75,3 +82,6 @@ export type AbortError = InstanceType<typeof LocalSdk.AbortError>
 export const query = sdk.query
 export const tool = sdk.tool
 export const createSdkMcpServer = sdk.createSdkMcpServer
+/** Хранилище сессий в памяти процесса (`options.sessionStore`) — для тестов и разработки. */
+export const InMemorySessionStore = sdk.InMemorySessionStore
+export type InMemorySessionStore = InstanceType<typeof LocalSdk.InMemorySessionStore>

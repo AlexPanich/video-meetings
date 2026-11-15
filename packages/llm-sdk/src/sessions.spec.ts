@@ -5,6 +5,7 @@ import { createSdkMcpServer, InMemorySessionStore, query, tool } from './index.j
 import type { HookInput, Options, SessionKey, SessionStore, SessionStoreEntry } from './index.js'
 import {
   collect,
+  hangingOllama,
   lastResult,
   ollamaReply,
   requests,
@@ -13,6 +14,7 @@ import {
   toolCallReply,
 } from './testing/ollama-mock.js'
 import type { OllamaRequestBody } from './testing/ollama-mock.js'
+import { DEFAULT_STORE_MAX_SESSIONS } from './sessions.js'
 
 beforeEach(() => {
   stubOllamaEnv()
@@ -410,6 +412,71 @@ describe('sessionStore', () => {
     expect(store.listSessions).toHaveBeenCalled()
     expect(dialog(requests(fetchMock)[0])[0]).toBe('user: Вопрос')
     expect(lastResult(messages).session_id).toBe(sessionId)
+  })
+
+  it('ход сохраняется до result: break на result не теряет его', async () => {
+    const store = new InMemorySessionStore()
+    scriptedOllama(ollamaReply('Запомнил'))
+    let sessionId = ''
+    for await (const message of query({
+      prompt: 'Запомни ЛИМОН-42',
+      options: { sessionStore: store },
+    })) {
+      if (message.type === 'result') {
+        sessionId = message.session_id
+        break
+      }
+    }
+
+    const fetchMock = scriptedOllama(ollamaReply('ЛИМОН-42'))
+    await collect(
+      query({ prompt: 'Какое слово?', options: { sessionStore: store, resume: sessionId } }),
+    )
+
+    expect(dialog(requests(fetchMock)[0])).toEqual([
+      'user: Запомни ЛИМОН-42',
+      'assistant: Запомнил',
+      'user: Какое слово?',
+    ])
+  })
+
+  it('прерванный ход и ответвление без ходов не пишутся', async () => {
+    const store = mapStore()
+    scriptedOllama(ollamaReply('Ок'))
+    const sessionId = await runSession('Привет', { sessionStore: store })
+    const appends = store.append.mock.calls.length
+
+    hangingOllama()
+    const q = query({ prompt: 'Снова', options: { sessionStore: store, resume: sessionId } })
+    await q.next()
+    const rest = collect(q)
+    await q.interrupt()
+    await rest
+    for await (const message of query({
+      prompt: 'Ещё',
+      options: { sessionStore: store, resume: sessionId, forkSession: true },
+    })) {
+      if (message.type === 'system') break
+    }
+
+    expect(store.append.mock.calls.length).toBe(appends)
+  })
+
+  it('хранилище по умолчанию вытесняет старые сессии', async () => {
+    scriptedOllama(
+      ...Array.from({ length: DEFAULT_STORE_MAX_SESSIONS + 1 }, () => ollamaReply('Ок')),
+    )
+    const first = await runSession('Первая')
+    let last = first
+    for (let index = 0; index < DEFAULT_STORE_MAX_SESSIONS; index += 1) {
+      last = await runSession(`Сессия ${index}`)
+    }
+
+    await expect(collect(query({ prompt: 'Снова', options: { resume: first } }))).rejects.toThrow(
+      first,
+    )
+    scriptedOllama(ollamaReply('Ок'))
+    await expect(runSession('Снова', { resume: last })).resolves.toBe(last)
   })
 
   it('сессии разных хранилищ не видны друг другу', async () => {

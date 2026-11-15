@@ -2,7 +2,9 @@
   "extends": "./tsconfig.compat.base.json",
   "compilerOptions": {
     "paths": {
-      "@video-meetings/llm": ["./src/index.ts"]
+      "@video-meetings/llm": ["./src/index.ts"],
+      // Исходники локального SDK (paths наследником заменяются целиком, а не дополняются).
+      "@video-meetings/llm-sdk": ["../llm-sdk/src/index.ts"]
     }
   }
 }

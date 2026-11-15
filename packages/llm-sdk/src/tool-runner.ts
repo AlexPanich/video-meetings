@@ -56,9 +56,9 @@ export async function executeTool(
     return toolError(permission.message)
   }
 
-  const parsed = registered.schema.safeParse(permission.input)
+  const parsed = registered.validate(permission.input)
   if (!parsed.success) {
-    return toolError(`Invalid input for ${call.name}: ${parsed.error.message}`)
+    return toolError(`Invalid input for ${call.name}: ${parsed.message}`)
   }
   let result: CallToolResult
   try {
