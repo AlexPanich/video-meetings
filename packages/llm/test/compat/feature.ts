@@ -8,12 +8,19 @@ import { AbortError, createSdkMcpServer, query, tool } from '@video-meetings/llm
 import type {
   CanUseTool,
   HookCallback,
+  McpHttpServerConfig,
+  McpServerConfig,
+  McpSSEServerConfig,
+  McpStdioServerConfig,
   Options,
   PermissionResult,
   Query,
   SDKMessage,
   SDKResultMessage,
   SDKUserMessage,
+  SessionKey,
+  SessionStore,
+  SessionStoreEntry,
 } from '@video-meetings/llm'
 
 export interface SimpleAnswer {
@@ -336,4 +343,86 @@ export async function structuredSummary(timeoutMs: number): Promise<StructuredAn
     clearTimeout(timer)
   }
   return answer
+}
+
+// --- Фаза 4: сессии и внешние MCP-серверы ---
+
+export interface SessionAnswer {
+  sessionId: string
+  result: string | null
+}
+
+async function answerIn(prompt: string, options: Options): Promise<SessionAnswer> {
+  const answer: SessionAnswer = { sessionId: '', result: null }
+  for await (const message of query({ prompt, options })) {
+    if (message.type === 'result') {
+      answer.sessionId = message.session_id
+      if (message.subtype === 'success') answer.result = message.result
+    }
+  }
+  return answer
+}
+
+/** Продолжение сессии по id, ответвление и продолжение последней сессии. */
+export async function sessions(): Promise<SessionAnswer[]> {
+  const base: Options = { systemPrompt: 'Отвечай кратко.', tools: [], maxTurns: 1 }
+  const first = await answerIn('Запомни кодовое слово ЛИМОН-42', base)
+  const resumed = await answerIn('Какое кодовое слово?', { ...base, resume: first.sessionId })
+  const forked = await answerIn('Теперь кодовое слово ГРУША-7', {
+    ...base,
+    resume: first.sessionId,
+    forkSession: true,
+  })
+  const continued = await answerIn('Какое кодовое слово?', { ...base, continue: true })
+  return [first, resumed, forked, continued]
+}
+
+/** Своё хранилище сессий (например, в БД) — только через типы фасада. */
+export function mapSessionStore(): SessionStore {
+  const data = new Map<string, SessionStoreEntry[]>()
+  const id = (key: SessionKey) => `${key.projectKey}/${key.sessionId}/${key.subpath ?? ''}`
+  return {
+    append: async (key, entries) => {
+      data.set(id(key), [...(data.get(id(key)) ?? []), ...entries])
+    },
+    load: async (key) => data.get(id(key)) ?? null,
+  }
+}
+
+export async function resumeFromStore(sessionId: string): Promise<SessionAnswer> {
+  return answerIn('Продолжим', { tools: [], resume: sessionId, sessionStore: mapSessionStore() })
+}
+
+const stdioServer: McpStdioServerConfig = {
+  type: 'stdio',
+  command: process.execPath,
+  args: ['echo-mcp-server.mjs'],
+  env: { ECHO_SECRET: 'KIWI-7319' },
+}
+
+const httpServer: McpHttpServerConfig = {
+  type: 'http',
+  url: 'http://localhost:3002/mcp',
+  headers: { Authorization: 'Bearer token' },
+}
+
+const sseServer: McpSSEServerConfig = { type: 'sse', url: 'http://localhost:3003/sse' }
+
+/** Внешние MCP-серверы рядом с SDK-сервером: права и хуки — как у SDK-инструментов. */
+export async function externalTools(): Promise<SessionAnswer> {
+  const servers: Record<string, McpServerConfig> = {
+    meeting: meetingServer,
+    echo: stdioServer,
+    remote: httpServer,
+    legacy: sseServer,
+  }
+  return answerIn('Узнай кодовое слово инструментом get_secret', {
+    tools: [],
+    mcpServers: servers,
+    allowedTools: ['mcp__echo__get_secret', 'mcp__remote'],
+    disallowedTools: ['mcp__legacy__echo'],
+    canUseTool: onlyMeetingTools,
+    hooks: { PostToolUse: [{ matcher: 'mcp__echo__.*', hooks: [logEvent] }] },
+    maxTurns: 5,
+  })
 }

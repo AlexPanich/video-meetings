@@ -365,5 +365,11 @@ pnpm --filter @video-meetings/llm-sdk lint
 pnpm --filter @video-meetings/llm-sdk build   # dist/ для сборки потребителей
 ```
 
+Тестовые помощники лежат в `src/testing` и в сборку не входят: `ollama-mock.ts` — мок `fetch` для
+Ollama (JSON и NDJSON-поток; запросы на loopback пропускает в настоящий `fetch`, на другие адреса —
+ошибка), `mcp-servers.ts` — внешние MCP-серверы для тестов: `http` и `sse` на `127.0.0.1` со
+случайным портом и путь к stdio-серверу `fixtures/echo-mcp-server.mjs` (отдельный процесс `node`).
+Сеть и Ollama тестам не нужны.
+
 В `exports` есть условие `source` → `src/index.ts`: тесты и линт фасада работают с исходниками
 без сборки. Контрактный набор против живой модели — в [`packages/llm`](../llm/README.md).

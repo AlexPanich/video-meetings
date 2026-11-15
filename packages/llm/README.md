@@ -46,3 +46,8 @@ LLM_CONTRACT=1 LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=... pnpm --filter @video
 ```
 
 Переменные читаются из корневого `.env`, заданные в shell имеют приоритет.
+
+Сценарии (`test/contract/*.contract.ts`): простой ответ; вызов SDK-инструмента, `maxTurns` →
+`error_max_turns`, deny в `PreToolUse` и в `canUseTool`; `structured_output`; `stream_event`,
+`interrupt()` и `abortController`; `resume` и `forkSession`; внешний stdio-MCP-сервер (фикстура
+`packages/llm-sdk/src/testing/fixtures/echo-mcp-server.mjs`).

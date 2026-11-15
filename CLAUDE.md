@@ -64,7 +64,7 @@ Env фасада и локального SDK (см. `.env.example`): `LLM_PROVID
 - Both apps use **Vitest** (not Jest) with `globals: true` — `describe`/`it`/`expect` are available without imports.
 - web: jsdom environment, `@testing-library/react`, jest-dom matchers loaded in `vitest.setup.ts`; tests are `src/**/*.{test,spec}.{ts,tsx}`, colocated with the code.
 - api: unit tests are `*.spec.ts` next to sources; e2e tests are `test/*.e2e-spec.ts` using `supertest`.
-- packages: `src/**/*.spec.ts` (node, `unstubEnvs`/`unstubGlobals`); общий мок-транспорт Ollama (JSON и NDJSON-поток) — `packages/llm-sdk/src/testing/ollama-mock.ts`, в сборку не входит; контрактные `packages/llm/test/contract/*.contract.ts` в `pnpm test` не входят.
+- packages: `src/**/*.spec.ts` (node, `unstubEnvs`/`unstubGlobals`); общий мок-транспорт Ollama (JSON и NDJSON-поток; запросы на loopback пропускает в настоящий `fetch`, на другие адреса — ошибка) — `packages/llm-sdk/src/testing/ollama-mock.ts`, тестовые внешние MCP-серверы (`http`/`sse` на `127.0.0.1`, stdio-фикстура `fixtures/echo-mcp-server.mjs` — отдельный процесс `node`) — `packages/llm-sdk/src/testing/mcp-servers.ts`; `src/testing` в сборку не входит; контрактные `packages/llm/test/contract/*.contract.ts` в `pnpm test` не входят.
 - Unit: `pnpm test` (root, all apps) — no database needed. api e2e: `pnpm test:e2e` (root) starts Postgres, applies migrations and runs them. Full run table and per-file examples: `apps/api/CLAUDE.md`, section «Тесты».
 
 ## Gotchas
