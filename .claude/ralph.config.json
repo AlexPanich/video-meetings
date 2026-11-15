@@ -1,7 +1,7 @@
 {
-  "milestone": "Фаза 4: Сессии и внешние MCP-серверы",
+  "milestone": "Фаза 5: Саммари встречи по текстовым файлам (API)",
   "maxIterations": 10,
   "maxTurns": 150,
-  "branch": "feature/llm-sdk-phase-4",
+  "branch": "feature/meeting-summary-phase-5",
   "prompt": "Прочитай .claude/ralph.md и следуй правилам оттуда. Возьми следующую открытую Issue из milestone '{milestone}' и реализуй его в '{branch}'"
 }
