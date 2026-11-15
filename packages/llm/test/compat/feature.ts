@@ -204,6 +204,7 @@ export async function toolAnswer(): Promise<ToolAnswer> {
     allowedTools: ['mcp__meeting__list_files', 'mcp__meeting__read_file'],
     disallowedTools: ['Bash'],
     permissionMode: 'bypassPermissions',
+    allowDangerouslySkipPermissions: true,
     canUseTool: onlyMeetingTools,
     maxTurns: 10,
     hooks: {

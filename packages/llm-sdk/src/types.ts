@@ -494,13 +494,18 @@ export interface Options {
   /** Запрет: инструмент не уходит модели и не выполняется ни при каких правах. */
   disallowedTools?: string[]
   permissionMode?: PermissionMode
+  /**
+   * Обязателен для `permissionMode: 'bypassPermissions'` (в опциях и в `setPermissionMode()`),
+   * как в оригинале: без него — исключение.
+   */
+  allowDangerouslySkipPermissions?: boolean
   /** Решает за инструменты вне `allowedTools`; без него такие вызовы отклоняются. */
   canUseTool?: CanUseTool
   hooks?: Partial<Record<HookEvent, HookCallbackMatcher[]>>
   /**
    * Финальный ответ — JSON по схеме: уходит в Ollama как `format`, проверяется, при ошибке
    * модель получает её описание и отвечает заново (всего 3 попытки, затем
-   * `error_during_execution`). Результат — `structured_output` в `result/success`.
+   * `error_max_structured_output_retries`). Результат — `structured_output` в `result/success`.
    */
   outputFormat?: OutputFormat
   /** Отдавать `stream_event` по ходу генерации (запрос к Ollama идёт потоком). */

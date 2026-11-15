@@ -71,10 +71,23 @@ export function query({ prompt, options = {} }: QueryParams): Query {
       return Promise.resolve(undefined)
     },
     setPermissionMode(mode: PermissionMode): Promise<void> {
+      if (mode === 'bypassPermissions' && !options.allowDangerouslySkipPermissions) {
+        return Promise.reject(bypassWithoutFlagError())
+      }
       state.permissionMode = mode
       return Promise.resolve()
     },
   })
+}
+
+/**
+ * Оригинал включает `bypassPermissions` только вместе с `allowDangerouslySkipPermissions`.
+ * Локально проверка та же, чтобы забытый флаг всплыл в разработке, а не в проде.
+ */
+function bypassWithoutFlagError(): Error {
+  return new Error(
+    "permissionMode 'bypassPermissions' requires allowDangerouslySkipPermissions: true",
+  )
 }
 
 /**
@@ -96,6 +109,9 @@ async function* run(
     throw new Error(
       `Built-in tools are not supported by the local SDK, pass tools: [] (got ${options.tools.join(', ')})`,
     )
+  }
+  if (options.permissionMode === 'bypassPermissions' && !options.allowDangerouslySkipPermissions) {
+    throw bypassWithoutFlagError()
   }
   const structured = structuredOutput(options.outputFormat)
   // Неизвестный resume — ошибка до подключения серверов и запросов к модели.
