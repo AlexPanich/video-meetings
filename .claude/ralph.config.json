@@ -1,7 +1,7 @@
 {
-  "milestone": "Фаза 3: Структурированный ответ, стриминг и отмена",
+  "milestone": "Фаза 4: Сессии и внешние MCP-серверы",
   "maxIterations": 10,
   "maxTurns": 150,
-  "branch": "feature/llm-sdk-phase-3",
+  "branch": "feature/llm-sdk-phase-4",
   "prompt": "Прочитай .claude/ralph.md и следуй правилам оттуда. Возьми следующую открытую Issue из milestone '{milestone}' и реализуй его в '{branch}'"
 }
