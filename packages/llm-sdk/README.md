@@ -30,6 +30,10 @@
   нужные фичам. Неизвестные сообщения пропускайте.
 - **Текст — только из блоков `type === 'text'`.** В режиме anthropic `content` содержит и
   `thinking`, `tool_use` и другие блоки (`OtherContentBlock`), у них нет `.text`.
+- **`structured_output` — `unknown`.** Проверяйте форму сами (type guard или zod), а провал —
+  по `subtype !== 'success'`: локальный и оригинальный SDK называют ошибку повторов по-разному.
+- **Отмена — `AbortError` из фасада.** Ловите `error instanceof AbortError`; после `interrupt()`
+  не ждите ни `result`, ни его отсутствия (см. «Отличия от оригинала»).
 
 ## Что умеет (фаза 1)
 
@@ -55,11 +59,8 @@ for await (const message of query({
   уходит первым сообщением с ролью `system`.
 - Рассуждение Qwen3 выключено (`think: false` в запросе): оно занимает сотни токенов на ход и
   вытесняет контекст.
-- `interrupt()` обрывает текущий запрос к Ollama или ожидание следующего сообщения потокового
-  `prompt`, генератор завершается без ошибки и без `result` (вся сессия, а не только ход;
-  поведение оригинала повторит фаза 3).
+- `interrupt()` и `abortController` останавливают сессию (см. «Отмена»).
 - Если Qwen всё же вернул рассуждение `<think>…</think>` в начале текста, SDK его отрезает.
-- `interrupt()` возвращает `undefined` (квитанции об очереди, как в оригинале, нет).
 - `modelUsage.maxOutputTokens` равен `OLLAMA_NUM_CTX`: отдельного лимита вывода нет, вход и выход
   делят одно окно. В оригинале это лимит вывода модели.
 
@@ -116,8 +117,9 @@ for await (const message of query({
   `{ content: [...] }`. `isError: true` из обработчика тоже даёт `is_error`.
 - Модели уходит текст блоков `text` результата через `\n`, прочие блоки (`image` и т. п.) —
   пометкой `[<type>]`.
-- Обработчик получает вторым аргументом `{ signal }` — срабатывает при `interrupt()`. После
-  `interrupt()` следующие вызовы ответа не выполняются, сессия кончается без `result`.
+- Обработчик получает вторым аргументом `{ signal }` — срабатывает при `interrupt()` и
+  `abortController.abort()`. После отмены следующие вызовы ответа не выполняются, сессия кончается
+  без `result`.
 - В `mcpServers` принимаются только серверы из `createSdkMcpServer()` этого пакета (через фасад
   так и есть); `stdio`/`http`/`sse` и чужой `McpServer` — ошибка (внешние серверы — фаза 4).
   Обработчики вызываются напрямую, без MCP-транспорта.
@@ -140,8 +142,8 @@ for await (const message of query({
    `{ behavior: 'allow', updatedInput? }` или `{ behavior: 'deny', message }` (`message` уходит
    модели). Исключение `canUseTool` — отказ. Без `canUseTool` и в режиме `dontAsk` — отказ.
 
-`interrupt()` не ждёт хуки, `canUseTool` и обработчики, которые не слушают `signal`: сессия
-завершается сразу, их результат отбрасывается.
+`interrupt()` и `abortController` не ждут хуки, `canUseTool` и обработчики, которые не слушают
+`signal`: сессия завершается сразу, их результат отбрасывается.
 
 - В `allowedTools`/`disallowedTools` — полное имя, `mcp__<сервер>` или `mcp__<сервер>__*` (все
   инструменты сервера). Шаблонов вроде `Bash(git:*)` нет.
@@ -213,7 +215,83 @@ SDK перед каждым запросом оценивает его объё�
   в `errors` (в потоковом `prompt` сессия ждёт следующее сообщение). Для длинных материалов
   давайте модели инструмент чтения по частям (`offset`/`limit`), а не вставляйте их в промпт.
 
-## Отличия от оригинала (фаза 2)
+## Структурированный ответ (фаза 3)
+
+```ts
+const schema = {
+  type: 'object',
+  properties: {
+    summary: { type: 'string' },
+    decisions: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['summary', 'decisions'],
+  additionalProperties: false,
+}
+
+for await (const message of query({
+  prompt: 'Сделай саммари встречи',
+  options: { tools: [], outputFormat: { type: 'json_schema', schema } },
+})) {
+  if (message.type === 'result' && message.subtype === 'success') {
+    console.log(message.structured_output) // unknown: проверьте форму сами (type guard / zod)
+  }
+}
+```
+
+- `outputFormat: { type: 'json_schema', schema }` — финальный ответ модели (без вызовов
+  инструментов) должен быть JSON по схеме. Результат — `structured_output` в `result/success`:
+  разобранный JSON как есть, тип `unknown`. В `result` остаётся текст ответа.
+- Схема (JSON) с требованием ответить только JSON по ней добавляется в конец системного промпта:
+  так модель видит поля и их `description`, в том числе когда `format` не уходит.
+- Схема уходит в Ollama как `format`: вывод ограничивается грамматикой схемы. Грамматика не даёт
+  модели вызвать инструмент, поэтому при инструментах обычные запросы идут без `format`, а
+  повтор после ответа не по схеме — с `format` и без инструментов.
+- Ответ проверяется по схеме (`z.fromJSONSchema` из zod 4). Не JSON или не по схеме — модель
+  получает сообщение с описанием ошибок (путь и текст) и отвечает заново; если ответ оборвался
+  по `num_predict`, к нему добавляется просьба отвечать короче. Всего **3 попытки** на сообщение
+  пользователя, затем `result/error_during_execution` с последней ошибкой в `errors`. Повторы
+  считаются в `maxTurns`: лимит кончился раньше попыток — `error_max_turns` (если оба кончились
+  на одном ответе — `error_during_execution`). Неудачные попытки и сообщения об ошибках остаются
+  в истории сессии и занимают контекст следующих сообщений потокового `prompt`.
+- Схема, которую zod не разбирает, или `type` не `json_schema` — исключение из генератора до
+  запроса к модели. Хук `Stop` вызывается только перед успешным `result`.
+
+## Стриминг (фаза 3)
+
+С `includePartialMessages: true` запрос к Ollama идёт потоком (NDJSON), и перед каждым полным
+`assistant` приходят сообщения `stream_event` (`event` — событие Messages API):
+
+- `message_start` (id — тот же, что у следующего `assistant`) → `content_block_start` /
+  `content_block_delta` (`text_delta` для текста, `input_json_delta` с аргументами вызова целиком
+  для `tool_use`) / `content_block_stop` → `message_delta` (`stop_reason`, `usage`) →
+  `message_stop`.
+- Рассуждение `<think>…</think>` в `text_delta` не попадает: пока начало ответа может оказаться
+  тегом, текст придерживается. Склейка `text_delta` равна тексту полного `assistant`.
+- Ollama присылает вызов инструмента целиком, поэтому `input_json_delta` один на вызов.
+- Обрыв соединения посреди тела (`Ollama stream was interrupted before the response was
+complete`), чанк `{ error }` (`Ollama failed: …`), строка не JSON или поток без `done` —
+  исключение, а не обрезанный ответ. `OLLAMA_TIMEOUT_MS` ограничивает запрос вместе с чтением
+  всего потока.
+
+## Отмена (фаза 3)
+
+| Способ                    | Что обрывает                                                       | Как кончается генератор                |
+| ------------------------- | ------------------------------------------------------------------ | -------------------------------------- |
+| `await q.interrupt()`     | текущий запрос к Ollama, хуки, `canUseTool`, инструменты, ожидание | без ошибки и без `result` (вся сессия) |
+| `options.abortController` | то же                                                              | исключение `AbortError`, без `result`  |
+
+- `AbortError` экспортирует фасад: `import { AbortError } from '@video-meetings/llm'`, проверка —
+  `error instanceof AbortError`. Оба способа передают отмену в `signal` обработчиков, хуков и
+  `canUseTool`; кто его не слушает, тех сессия не ждёт, их результат отбрасывается.
+- `abort()` после того, как сессия уже отдала `result` и закончилась, ошибки не даёт.
+- `interrupt()` не трогает `abortController` вызывающего кода (`signal.aborted` остаётся `false`)
+  и возвращает `undefined` (квитанции об очереди, как в оригинале, нет).
+- `SessionEnd` вызывается при любой отмене и получает свой `signal`, чтобы успеть доработать.
+- `setPermissionMode()` меняет режим для следующих вызовов той же сессии (см. «Права»).
+
+## Отличия от оригинала
+
+Фаза 2:
 
 - Сообщения `prompt` с ролью `assistant` (`message.role` у `SDKUserMessage`) уходят модели как
   сообщения пользователя; из массива `content` берутся только блоки `text`.
@@ -230,6 +308,22 @@ SDK перед каждым запросом оценивает его объё�
 - Качество вызова инструментов зависит от Qwen: модель может назвать несуществующий инструмент
   или передать аргументы не по схеме — это уходит ей ошибкой, и она обычно исправляется на
   следующем ходу. Держите `maxTurns`.
+
+Фаза 3:
+
+- Исчерпанные повторы `outputFormat` — `error_during_execution`; оригинал отдаёт
+  `error_max_structured_output_retries`. Проверяйте `subtype !== 'success'`, а не конкретную
+  ошибку.
+- Повтор ответа по схеме идёт без инструментов (ограничение `format` Ollama); оригинал может
+  вызывать инструменты и в повторе. Число попыток (3) фиксировано.
+- `interrupt()` кончает всю сессию без `result`; оригинал отдаёт `result` прерванного хода и
+  ждёт следующее сообщение потокового `prompt`. Код фичи не должен рассчитывать ни на то, ни на
+  другое: после `interrupt()` закройте свой поток `prompt` и не ждите `success`.
+- `stream_event` — только перечисленные события: нет `thinking`-блоков, `input_json_delta`
+  приходит одним куском, `usage` в `message_start` нулевой. Если модель пришлёт текст после
+  вызова инструмента, порядок блоков в событиях и в полном `assistant` разойдётся (Qwen
+  присылает вызовы в конце ответа, на практике порядок совпадает).
+- Типы: `outputFormat` — только `json_schema`; `structured_output` — `unknown`, как в оригинале.
 
 ## Настройки (env)
 
@@ -254,7 +348,12 @@ Env читается при первом `next()` генератора. Неко
 - `Ollama request timed out after <N> ms` — превышен `OLLAMA_TIMEOUT_MS`;
 - `Ollama responded with <статус>: <error из ответа>` — HTTP-ошибка Ollama (например, нет модели);
   если тело не JSON Ollama (например, HTML прокси) — только статус, тело в `cause`;
-- `Ollama returned an unexpected response` — ответ 200 не той формы, тело в `cause`.
+- `Ollama returned an unexpected response` — ответ 200 не той формы, тело в `cause`;
+- потоковые (`includePartialMessages`): `Ollama stream was interrupted before the response was
+complete` — соединение оборвалось посреди тела, `Ollama stream ended before the response was
+complete` — поток кончился без `done`, `Ollama failed: <error>` — Ollama прислала ошибку в
+  потоке;
+- `AbortError` — отмена через `options.abortController` (см. «Отмена»).
 
 Сырое тело ответа не попадает в текст ошибки: он может дойти до пользователя.
 
