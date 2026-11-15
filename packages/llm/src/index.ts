@@ -70,6 +70,8 @@ const sdk = await loadSdk(provider)
 
 /** Ошибка отмены через `options.abortController` (проверка — `instanceof AbortError`). */
 export const AbortError = sdk.AbortError
+/** Тип экземпляра: `catch (e) { … e is AbortError }`, как у класса оригинала. */
+export type AbortError = InstanceType<typeof LocalSdk.AbortError>
 export const query = sdk.query
 export const tool = sdk.tool
 export const createSdkMcpServer = sdk.createSdkMcpServer

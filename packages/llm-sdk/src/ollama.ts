@@ -113,7 +113,7 @@ async function send(
     }),
     signal,
   })
-  if (!response.ok) throw await httpError(response)
+  if (!response.ok) throw await httpError(response, signal)
   return response
 }
 
@@ -122,11 +122,22 @@ async function* lines(response: Response): AsyncGenerator<string> {
   if (!response.body) return
   const decoder = new TextDecoder()
   let buffer = ''
-  for await (const bytes of response.body) {
-    buffer += decoder.decode(bytes, { stream: true })
-    const parts = buffer.split('\n')
-    buffer = parts.pop() ?? ''
-    for (const part of parts) if (part.trim() !== '') yield part
+  try {
+    for await (const bytes of response.body) {
+      buffer += decoder.decode(bytes, { stream: true })
+      const parts = buffer.split('\n')
+      buffer = parts.pop() ?? ''
+      for (const part of parts) if (part.trim() !== '') yield part
+    }
+  } catch (error) {
+    // Соединение оборвалось посреди тела (undici: `TypeError: terminated`): Ollama была доступна,
+    // но поток не дошёл — это не «unreachable». Отмену и таймаут разбирает describeError.
+    if (error instanceof TypeError) {
+      throw new Error('Ollama stream was interrupted before the response was complete', {
+        cause: error,
+      })
+    }
+    throw error
   }
   buffer += decoder.decode()
   if (buffer.trim() !== '') yield buffer
@@ -190,8 +201,13 @@ function isToolCallList(value: unknown): value is OllamaToolCall[] {
 }
 
 /** HTTP-ошибка: в тексте — сообщение Ollama из `{ error }`, чужое тело (прокси) — только в cause. */
-async function httpError(response: Response): Promise<Error> {
-  const text = await response.text().catch(() => '')
+async function httpError(response: Response, signal: AbortSignal): Promise<Error> {
+  const text = await response.text().catch((error: unknown) => {
+    // Чтение тела оборвала отмена или таймаут: это их ошибка, а не HTTP-ошибка без текста —
+    // иначе abort() во время чтения дал бы `Ollama responded with …` вместо `AbortError`.
+    if (signal.aborted && error === signal.reason) throw error
+    return ''
+  })
   try {
     const body = JSON.parse(text) as { error?: unknown }
     if (typeof body.error === 'string') {

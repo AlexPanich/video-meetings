@@ -13,6 +13,7 @@ import {
   stubOllamaEnv,
   toolCallReply,
 } from './testing/ollama-mock.js'
+import type { FetchArgs } from './testing/ollama-mock.js'
 
 function noteServer(
   handler = vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'ok' }] })),
@@ -81,6 +82,26 @@ describe('abortController', () => {
     const error: unknown = await pending.catch((reason: unknown) => reason)
     expect(error).toBeInstanceOf(Error)
     expect((error as Error).message).toMatch(/abort/i)
+  }, 2000)
+
+  it('abort() во время чтения тела HTTP-ошибки — AbortError, а не текст ошибки Ollama', async () => {
+    const abortController = new AbortController()
+    const fetchMock = vi.fn<(...args: FetchArgs) => Promise<Response>>((_input, init) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          // Тело 500 читается, когда вызывающий отменяет сессию: как у настоящего fetch, чтение
+          // отклоняется `signal.reason`.
+          init?.signal?.addEventListener('abort', () => controller.error(init.signal?.reason))
+          abortController.abort()
+        },
+      })
+      return Promise.resolve(new Response(body, { status: 500 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      collect(query({ prompt: 'hi', options: { abortController } })),
+    ).rejects.toBeInstanceOf(AbortError)
   }, 2000)
 
   it('уже отменённый abortController — запрос не уходит, AbortError', async () => {

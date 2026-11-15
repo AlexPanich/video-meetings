@@ -52,6 +52,15 @@ export function structuredOutput(format: OutputFormat | undefined): StructuredOu
 }
 
 /**
+ * Требование к финальному ответу для системного промпта. Грамматика `format` ограничивает только
+ * форму, а с инструментами первый финальный ответ идёт вовсе без неё: без схемы в контексте
+ * модель ответила бы прозой и не увидела бы `description` полей.
+ */
+export function structuredInstruction(schema: Record<string, unknown>): string {
+  return `When you give your final answer (not a tool call), respond with only a JSON value that matches this JSON schema, without any other text:\n${JSON.stringify(schema)}`
+}
+
+/**
  * Сообщение модели после ответа не по схеме: что не так и что ответить. Ответ, оборванный по
  * `num_predict`, — повод отвечать короче, а не просто повторить.
  */
@@ -59,5 +68,5 @@ export function retryPrompt(error: string, truncated: boolean): string {
   const cut = truncated
     ? '\nThe response was cut off by the output length limit, keep it shorter.'
     : ''
-  return `${error}${cut}\nRespond again with only a JSON value that matches the required JSON schema, without any other text.`
+  return `${error}${cut}\nRespond again with only a JSON value that matches the JSON schema from the system prompt, without any other text.`
 }

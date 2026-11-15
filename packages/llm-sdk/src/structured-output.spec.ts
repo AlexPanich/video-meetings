@@ -79,6 +79,40 @@ describe('outputFormat: structured_output', () => {
     expect(result).not.toHaveProperty('structured_output')
   })
 
+  it('схема попадает в системный промпт после systemPrompt вызывающего', async () => {
+    const fetchMock = scriptedOllama(ollamaReply(JSON.stringify(VALID)))
+
+    await collect(
+      query({ prompt: 'Саммари', options: structuredOptions({ systemPrompt: 'Ты секретарь.' }) }),
+    )
+
+    const [system] = requests(fetchMock)[0].messages
+    expect(system.role).toBe('system')
+    expect(system.content.startsWith('Ты секретарь.\n\n')).toBe(true)
+    expect(system.content).toContain(JSON.stringify(SCHEMA))
+  })
+
+  it('с инструментами схема в системном промпте есть и в запросе без format', async () => {
+    const { server } = meetingServer()
+    const fetchMock = scriptedOllama(ollamaReply(JSON.stringify(VALID)))
+
+    await collect(
+      query({
+        prompt: 'Саммари',
+        options: structuredOptions({
+          tools: [],
+          mcpServers: { meeting: server },
+          allowedTools: ['mcp__meeting__read_notes'],
+        }),
+      }),
+    )
+
+    const [request] = requests(fetchMock)
+    expect(request).not.toHaveProperty('format')
+    expect(request.messages[0]).toMatchObject({ role: 'system' })
+    expect(request.messages[0].content).toContain(JSON.stringify(SCHEMA))
+  })
+
   it('рассуждение <think> перед JSON не мешает разбору', async () => {
     scriptedOllama(ollamaReply(`<think>подумаю</think>\n${JSON.stringify(VALID)}`))
 

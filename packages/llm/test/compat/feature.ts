@@ -276,6 +276,11 @@ function isMeetingSummary(value: unknown): value is MeetingSummary {
   )
 }
 
+/** `AbortError` фасада — и значение для `instanceof`, и тип. */
+function isAbort(error: unknown): error is AbortError {
+  return error instanceof AbortError
+}
+
 export interface StructuredAnswer {
   summary: MeetingSummary | null
   error: string | null
@@ -325,7 +330,7 @@ export async function structuredSummary(timeoutMs: number): Promise<StructuredAn
       }
     }
   } catch (error) {
-    if (!(error instanceof AbortError)) throw error
+    if (!isAbort(error)) throw error
     answer.aborted = true
   } finally {
     clearTimeout(timer)

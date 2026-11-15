@@ -289,6 +289,26 @@ describe('includePartialMessages: ошибки потока', () => {
     ).rejects.toThrow(/Ollama/)
   })
 
+  it('соединение оборвалось посреди тела — «stream was interrupted», а не «unreachable»', async () => {
+    const encoder = new TextEncoder()
+    const broken = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(`${JSON.stringify(streamChunk('При'))}\n`))
+          // Так undici сообщает о разрыве соединения во время чтения тела.
+          controller.error(new TypeError('terminated'))
+        },
+      }),
+      { status: 200 },
+    )
+    scriptedOllama(broken)
+
+    const run = collect(query({ prompt: 'hi', options: { includePartialMessages: true } }))
+
+    await expect(run).rejects.toThrow('Ollama stream was interrupted')
+    await expect(run).rejects.not.toThrow(/unreachable/)
+  })
+
   it('чанк, разрезанный между кусками тела, собирается целиком', async () => {
     const encoder = new TextEncoder()
     const line = `${JSON.stringify(streamChunk('Привет'))}\n${JSON.stringify(streamDone())}\n`

@@ -11,7 +11,12 @@ import { matchesToolList } from './permissions.js'
 import { hookBase } from './session.js'
 import type { QueryState, Session } from './session.js'
 import { StreamTranslator } from './stream-events.js'
-import { retryPrompt, STRUCTURED_OUTPUT_ATTEMPTS, structuredOutput } from './structured.js'
+import {
+  retryPrompt,
+  STRUCTURED_OUTPUT_ATTEMPTS,
+  structuredInstruction,
+  structuredOutput,
+} from './structured.js'
 import { executeTool } from './tool-runner.js'
 import type { ToolOutcome } from './tool-runner.js'
 import { registerTools } from './tools.js'
@@ -109,7 +114,12 @@ async function* run(
     ollamaTools,
     structured,
   }
-  const systemPrompt = joinSystemPrompt(options.systemPrompt)
+  const systemPrompt = [
+    joinSystemPrompt(options.systemPrompt),
+    structured ? structuredInstruction(structured.schema) : '',
+  ]
+    .filter((part) => part !== '')
+    .join('\n\n')
   if (systemPrompt) session.history.push({ role: 'system', content: systemPrompt })
 
   yield {
