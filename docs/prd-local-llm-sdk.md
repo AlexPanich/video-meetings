@@ -33,7 +33,7 @@
   - `system` (subtype `init`: `session_id`, `model`, `tools`);
   - `assistant` (контент-блоки `text`, `tool_use`);
   - `user` (`tool_result`);
-  - `result` (subtypes `success`, `error_max_turns`, `error_during_execution`; поля `result`, `num_turns`, `duration_ms`, `usage`, `total_cost_usd` (для локальной модели 0), `session_id`, `structured_output`);
+  - `result` (subtypes `success`, `error_max_turns`, `error_during_execution`, `error_max_structured_output_retries`; поля `result`, `num_turns`, `duration_ms`, `usage`, `total_cost_usd` (для локальной модели 0), `session_id`, `structured_output`);
   - `stream_event` (при `includePartialMessages`).
 - Поддерживаемые `options`:
   - `model`, `systemPrompt`, `maxTurns`;
@@ -112,7 +112,7 @@ WHISPER_LANGUAGE=ru
 
 - **Совместимость — главное требование.** Совпадение проверяется по типам: код фич компилируется с обоими провайдерами без `any` и приведений. Опорная версия `@anthropic-ai/claude-agent-sdk` фиксируется в `package.json`. Отличия поведения перечислены в README пакета.
 - Claude Agent SDK запускает Claude Code как дочерний процесс. Для прода нужен бинарник на сервере, а `bypassPermissions` и отключение встроенных инструментов обязательны для серверного использования. Код фич должен явно задавать `tools: []` (отключает встроенные инструменты) и `allowedTools`, чтобы прод-агент не получил доступ к файловой системе и shell сервера: в Claude Agent SDK `allowedTools` — только список автоодобрения, набор инструментов он не ограничивает.
-- Qwen слабее Claude в tool calling и строгом JSON. SDK должен валидировать `structured_output` по схеме и при невалидном ответе повторять попытку ограниченное число раз, после чего возвращать `error_during_execution`.
+- Qwen слабее Claude в tool calling и строгом JSON. SDK должен валидировать `structured_output` по схеме и при невалидном ответе повторять попытку ограниченное число раз, после чего возвращать `error_max_structured_output_retries` (как оригинал).
 - Контекст Qwen в Ollama ограничен `num_ctx`. Значение настраивается, а агентный цикл не должен падать при переполнении: старые результаты инструментов усекаются.
 - Генерация на локальной машине может идти минутами. Нужны таймауты на запрос и на задачу целиком, отмена через `abortController`, а при рестарте api зависшие задачи помечаются `failed`.
 - Аудио и видео до 500 МиБ передаются на транскрибацию потоком, без загрузки в память api. Для видео может понадобиться извлечение аудиодорожки.

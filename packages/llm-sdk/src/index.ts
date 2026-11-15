@@ -1,3 +1,4 @@
+export { AbortError } from './abort.js'
 export { query } from './query.js'
 export { createSdkMcpServer, tool } from './tools.js'
 export type {
@@ -16,6 +17,7 @@ export type {
   HookJSONOutput,
   HookPermissionDecision,
   InferShape,
+  JsonSchemaOutputFormat,
   McpSdkServerConfigWithInstance,
   McpServerConfig,
   ModelUsage,
@@ -23,6 +25,7 @@ export type {
   OtherHookEvent,
   OtherHookInput,
   Options,
+  OutputFormat,
   PermissionMode,
   PermissionResult,
   PostToolUseHookInput,
@@ -32,6 +35,7 @@ export type {
   SDKAssistantMessage,
   SDKControlInterruptResponse,
   SDKMessage,
+  SDKPartialAssistantMessage,
   SDKPermissionDenial,
   SDKResultError,
   SDKResultMessage,
@@ -42,6 +46,7 @@ export type {
   SessionEndHookInput,
   SessionStartHookInput,
   StopHookInput,
+  StreamEvent,
   TextBlock,
   ToolUseBlock,
   Usage,

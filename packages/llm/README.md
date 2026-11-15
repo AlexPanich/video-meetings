@@ -18,8 +18,10 @@ import type { SDKMessage } from '@video-meetings/llm'
 В режиме `local` модуль Anthropic не импортируется, поэтому запросов к Anthropic нет — это
 проверяет тест с перехватом `fetch`, `http/https.request` и `child_process.spawn`.
 
-Типы фасада — типы локального SDK, они повторяют оригинал (подмножество полей и вариантов). Правила
-для кода фич (`tools: []`, `default` в `switch` по типу сообщения, текст только из блоков `text`) —
+Фасад экспортирует `query`, `tool`, `createSdkMcpServer`, `AbortError` (ошибка отмены через
+`abortController`, проверка — `instanceof`) и типы. Типы фасада — типы локального SDK, они
+повторяют оригинал (подмножество полей и вариантов). Правила для кода фич (`tools: []`, `default`
+в `switch` по типу сообщения, текст только из блоков `text`, `structured_output` как `unknown`) —
 в [README `llm-sdk`](../llm-sdk/README.md#правила-для-кода-фич).
 
 ## Проверки

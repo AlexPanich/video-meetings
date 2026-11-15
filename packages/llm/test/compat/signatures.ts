@@ -49,3 +49,14 @@ export type InitFromAnthropic = Assert<
 export type UserFromAnthropic = Assert<
   Assignable<AnthropicMessage<{ type: 'user' }>, Local.SDKUserMessage>
 >
+export type PartialFromAnthropic = Assert<
+  Assignable<AnthropicMessage<{ type: 'stream_event' }>, Local.SDKPartialAssistantMessage>
+>
+
+// Фаза 3: формат структурированного ответа и класс ошибки отмены (`abortController`).
+export type OutputFormatToAnthropic = Assert<
+  Assignable<Local.OutputFormat, NonNullable<Anthropic.Options['outputFormat']>>
+>
+export type AbortErrorFromAnthropic = Assert<
+  Assignable<typeof Anthropic.AbortError, typeof Local.AbortError>
+>

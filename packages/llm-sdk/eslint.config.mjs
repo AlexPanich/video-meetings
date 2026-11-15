@@ -31,7 +31,7 @@ export default tseslint.config(
   {
     // Фикстуры тестов: синхронные async-генераторы промптов и мок fetch, который отклоняется
     // `signal.reason` как настоящий fetch.
-    files: ['**/*.spec.ts'],
+    files: ['**/*.spec.ts', 'src/testing/**/*.ts'],
     rules: {
       '@typescript-eslint/require-await': 'off',
       '@typescript-eslint/prefer-promise-reject-errors': 'off',
