@@ -63,11 +63,41 @@ export class ContextBudget {
    * 2. если этого мало — самые старые обмены «вызов — результаты» убираются целиком и заменяются
    *    одной пометкой `[N earlier tool calls … omitted …]` (столько, сколько нужно);
    * 3. результаты последнего обмена усекаются, только если без этого не помещается никак;
-   * 4. не помещается и так (большой системный промпт или сообщение пользователя) —
+   * 4. если и этого мало — самые старые обмены «сообщение пользователя — ответ» (прежние ходы
+   *    сессии, в том числе продолженной через `resume`) убираются и заменяются пометкой
+   *    `[N earlier messages … omitted …]`; текущий ход (последнее сообщение пользователя и всё
+   *    после него) не трогается;
+   * 5. не помещается и так (большой системный промпт или сообщение пользователя) —
    *    `ContextOverflowError`: иначе Ollama молча отбросила бы часть входа.
    * История сессии не меняется.
    */
   fit(messages: OllamaMessage[]): FittedRequest {
+    const estimated = this.estimate(messages)
+    if (estimated <= this.inputTokens) return this.request(messages, estimated)
+    const fitted = this.fitTools(messages)
+    if (fitted) return fitted
+
+    // Шаг 4: прежние ходы диалога, от старых к новым. Без них вход только меньше, поэтому
+    // ищем минимальное число убранных ходов бинарным поиском, как и для обменов инструментов.
+    const turns = turnStarts(messages)
+    const attempt = (dropped: number) => this.fitTools(dropTurns(messages, turns, dropped))
+    const maxDropped = turns.length - 1
+    if (maxDropped > 0 && attempt(maxDropped)) {
+      let low = 0
+      let high = maxDropped
+      while (high - low > 1) {
+        const middle = Math.floor((low + high) / 2)
+        if (attempt(middle)) high = middle
+        else low = middle
+      }
+      const found = attempt(high)
+      if (found) return found
+    }
+    throw new ContextOverflowError(estimated, this.inputTokens, this.numCtx)
+  }
+
+  /** Шаги 1–3: усечение и схлопывание обменов инструментов; не помещается — `undefined`. */
+  private fitTools(messages: OllamaMessage[]): FittedRequest | undefined {
     const estimated = this.estimate(messages)
     if (estimated <= this.inputTokens) return this.request(messages, estimated)
 
@@ -95,7 +125,7 @@ export class ContextBudget {
       }
       if (found) return found
     }
-    throw new ContextOverflowError(estimated, this.inputTokens, this.numCtx)
+    return undefined
   }
 
   /** Уточняет оценку по числу токенов входа, которое насчитала Ollama. */
@@ -200,6 +230,30 @@ function collapseExchanges(messages: OllamaMessage[], removed: Exchange[]): Olla
   }
   result.push(...messages.slice(next))
   return result
+}
+
+/** Индексы сообщений пользователя (начала ходов) после системного промпта. */
+function turnStarts(messages: OllamaMessage[]): number[] {
+  const starts: number[] = []
+  for (const [index, message] of messages.entries()) {
+    if (message.role === 'user') starts.push(index)
+  }
+  return starts
+}
+
+/**
+ * Убирает `dropped` самых старых ходов: всё от первого сообщения пользователя до начала хода
+ * `turns[dropped]`. Системный промпт остаётся, на месте убранного — одна пометка.
+ */
+function dropTurns(messages: OllamaMessage[], turns: number[], dropped: number): OllamaMessage[] {
+  if (dropped === 0) return messages
+  const from = turns[0]
+  const to = turns[dropped]
+  const note: OllamaMessage = {
+    role: 'assistant',
+    content: `[${to - from} earlier messages of this conversation were omitted to fit the context window]`,
+  }
+  return [...messages.slice(0, from), note, ...messages.slice(to)]
 }
 
 /** Оставляет начало текста длиной `keep` и пометку, сколько символов отрезано. */

@@ -1,6 +1,7 @@
 // Хранилище сессий: интерфейс `SessionStore` (как в оригинале), реализация в памяти и перевод
 // истории сессии в записи хранилища и обратно (`resume`, `continue`, `forkSession`).
 import { randomUUID } from 'node:crypto'
+import { untilAborted } from './abort.js'
 import type { OllamaMessage, OllamaToolCall } from './ollama.js'
 import { isRecord } from './session.js'
 import type { Options, SessionKey, SessionStore, SessionStoreEntry } from './types.js'
@@ -106,6 +107,9 @@ class BoundedSessionStore extends InMemorySessionStore {
 /** Хранилище `query()` без `options.sessionStore`: общее на процесс. */
 const defaultStore = new BoundedSessionStore(DEFAULT_STORE_MAX_SESSIONS)
 
+/** Таймаут `load()`/`listSessions()` хранилища по умолчанию, как `loadTimeoutMs` оригинала. */
+export const DEFAULT_LOAD_TIMEOUT_MS = 60_000
+
 /** Тип записи хранилища с сообщением истории (формат локального SDK). */
 const MESSAGE_ENTRY = 'ollama_message'
 
@@ -128,18 +132,29 @@ export interface SessionLink {
   resumed: boolean
   /** Сколько сообщений истории (без системного промпта) уже в хранилище под `id`. */
   persisted: number
+  /** `persistSession: false`: ходы в хранилище не пишутся. */
+  readOnly: boolean
 }
 
 /**
  * Находит сессию по `resume` или последнюю по `continue` и загружает её историю; с
  * `forkSession` история уходит в новую сессию, исходная не меняется. Неизвестный `resume` —
- * ошибка с этим id.
+ * ошибка с этим id. Вызовы хранилища ограничены `loadTimeoutMs` и отменяются `signal`.
  */
-export async function openSession(options: Options): Promise<SessionLink> {
+export async function openSession(options: Options, signal: AbortSignal): Promise<SessionLink> {
+  if (options.persistSession === false && options.sessionStore) {
+    // Как в оригинале: хранилище там — зеркало локальной записи, без неё не работает.
+    throw new Error('sessionStore cannot be used with persistSession: false')
+  }
   const store = options.sessionStore ?? defaultStore
   const project = projectKey()
+  const call = <T>(name: string, promise: Promise<T>) =>
+    withTimeout(name, promise, options.loadTimeoutMs ?? DEFAULT_LOAD_TIMEOUT_MS, signal)
   let sourceId = options.resume
-  if (sourceId === undefined && options.continue) sourceId = await latestSession(store, project)
+  if (sourceId === undefined && options.continue) {
+    sourceId = await latestSession(store, project, call)
+  }
+  const readOnly = options.persistSession === false
   if (sourceId === undefined) {
     return {
       id: randomUUID(),
@@ -148,11 +163,23 @@ export async function openSession(options: Options): Promise<SessionLink> {
       history: [],
       resumed: false,
       persisted: 0,
+      readOnly,
     }
   }
-  const entries = await store.load({ projectKey: project, sessionId: sourceId })
+  const entries = await call('load', store.load({ projectKey: project, sessionId: sourceId }))
   if (entries === null) throw new Error(`No conversation found with session ID: ${sourceId}`)
   const restored = entries.flatMap(fromEntry)
+  if (entries.length > 0 && restored.length === 0) {
+    // Иначе сессия молча продолжилась бы без контекста: например, её записал провайдер
+    // anthropic в то же хранилище.
+    throw new Error(`Session ${sourceId} has no entries readable by the local SDK`)
+  }
+  const skipped = entries.length - restored.length
+  if (skipped > 0) {
+    process.emitWarning(
+      `Session ${sourceId}: ${skipped} of ${entries.length} store entries are not readable by the local SDK and were skipped`,
+    )
+  }
   const fork = options.forkSession === true
   return {
     id: fork ? randomUUID() : sourceId,
@@ -162,14 +189,38 @@ export async function openSession(options: Options): Promise<SessionLink> {
     resumed: true,
     // Ответвление пишет всю историю под новым id при первом сохранении.
     persisted: fork ? 0 : restored.length,
+    readOnly,
   }
 }
 
-async function latestSession(store: SessionStore, project: string): Promise<string | undefined> {
+/** Ждёт вызов хранилища не дольше `timeoutMs` и до отмены сессии. */
+async function withTimeout<T>(
+  name: string,
+  promise: Promise<T>,
+  timeoutMs: number,
+  signal: AbortSignal,
+): Promise<T> {
+  const timeout = new AbortController()
+  const timer = setTimeout(
+    () => timeout.abort(new Error(`sessionStore.${name}() timed out after ${timeoutMs} ms`)),
+    timeoutMs,
+  )
+  try {
+    return await untilAborted(promise, AbortSignal.any([signal, timeout.signal]))
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function latestSession(
+  store: SessionStore,
+  project: string,
+  call: <T>(name: string, promise: Promise<T>) => Promise<T>,
+): Promise<string | undefined> {
   if (!store.listSessions) {
     throw new Error('options.continue requires a sessionStore with listSessions()')
   }
-  const sessions = await store.listSessions(project)
+  const sessions = await call('listSessions', store.listSessions(project))
   let latest: { sessionId: string; mtime: number } | undefined
   for (const session of sessions) {
     if (!latest || session.mtime > latest.mtime) latest = session
@@ -183,6 +234,7 @@ async function latestSession(store: SessionStore, project: string): Promise<stri
  * `query()` заново.
  */
 export async function persistSession(link: SessionLink): Promise<void> {
+  if (link.readOnly) return
   const messages = link.history.filter((message) => message.role !== 'system')
   if (messages.length <= link.persisted) return
   const fresh = messages.slice(link.persisted)
@@ -199,8 +251,8 @@ function toEntry(sessionId: string, message: OllamaMessage): SessionStoreEntry {
     uuid: randomUUID(),
     timestamp: new Date().toISOString(),
     session_id: sessionId,
-    // Копия: сообщение истории не должно меняться через хранилище, которое держит ссылку.
-    message: structuredClone(message),
+    // Без копии: `InMemorySessionStore` копирует записи сам, а сообщения истории SDK не меняет.
+    message,
   }
 }
 
@@ -209,6 +261,9 @@ function fromEntry(entry: SessionStoreEntry): OllamaMessage[] {
   if (entry.type !== MESSAGE_ENTRY || !isRecord(entry.message)) return []
   const message = entry.message
   if (typeof message.content !== 'string') return []
+  const toolCalls = message.tool_calls === undefined ? undefined : readToolCalls(message.tool_calls)
+  // Вызовы не той формы Ollama отвергла бы HTTP 400 на каждом запросе сессии: запись битая.
+  if (toolCalls === null) return []
   switch (message.role) {
     case 'user':
       return [{ role: 'user', content: message.content }]
@@ -217,9 +272,7 @@ function fromEntry(entry: SessionStoreEntry): OllamaMessage[] {
         {
           role: 'assistant',
           content: message.content,
-          ...(Array.isArray(message.tool_calls)
-            ? { tool_calls: message.tool_calls as OllamaToolCall[] }
-            : {}),
+          ...(toolCalls ? { tool_calls: toolCalls } : {}),
         },
       ]
     case 'tool':
@@ -229,4 +282,17 @@ function fromEntry(entry: SessionStoreEntry): OllamaMessage[] {
     default:
       return []
   }
+}
+
+/** `tool_calls` из хранилища: массив `{ function: { name, arguments } }`, иначе `null`. */
+function readToolCalls(value: unknown): OllamaToolCall[] | null {
+  if (!Array.isArray(value)) return null
+  const calls: OllamaToolCall[] = []
+  for (const call of value) {
+    if (!isRecord(call) || !isRecord(call.function)) return null
+    const { name, arguments: args } = call.function
+    if (typeof name !== 'string' || !(isRecord(args) || typeof args === 'string')) return null
+    calls.push({ function: { name, arguments: args } })
+  }
+  return calls
 }

@@ -115,7 +115,7 @@ async function* run(
   }
   const structured = structuredOutput(options.outputFormat)
   // Неизвестный resume — ошибка до подключения серверов и запросов к модели.
-  const link = await openSession(options)
+  const link = await openSession(options, state.signal)
   const external = await ExternalServers.connect(options.mcpServers, state.signal)
   try {
     yield* runSession(prompt, options, state, config, structured, link, external)
@@ -247,6 +247,8 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
     state.signal,
   )
   if (stopped(state)) return false
+  // Начало хода: при переполнении контекста ход откатывается целиком.
+  const turnStart = session.history.length
   session.history.push({ role: 'user', content: prompt })
 
   // Для result: модель из последнего ответа и num_predict последнего запроса.
@@ -300,14 +302,16 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
       fitted = session.context.fit(session.history)
     } catch (error) {
       if (!(error instanceof ContextOverflowError)) throw error
-      // Запрос не отправляется: Ollama молча отбросила бы часть входа.
+      // Запрос не отправляется: Ollama молча отбросила бы часть входа. Ход не сохраняется и
+      // убирается из истории: иначе каждое следующее сообщение сессии (и любой `resume`) снова
+      // упиралось бы в то же слишком большое сообщение.
       const overflow: SDKResultError = {
         ...resultBase(null),
         subtype: 'error_during_execution',
         is_error: true,
         errors: [error.message],
       }
-      await session.persist()
+      session.history.length = turnStart
       yield overflow
       return true
     }

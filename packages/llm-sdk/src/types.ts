@@ -523,6 +523,14 @@ export interface Options {
    * процессами сессии продолжаются только через своё хранилище.
    */
   sessionStore?: SessionStore
+  /**
+   * `false` — ходы сессии не сохраняются (как в оригинале, где это отключает запись транскрипта
+   * на диск): такую сессию нельзя продолжить через `resume`, и она не занимает память хранилища
+   * по умолчанию. Вместе с `sessionStore` — ошибка, как в оригинале.
+   */
+  persistSession?: boolean
+  /** Таймаут каждого `sessionStore.load()`/`listSessions()` при `resume`/`continue`, мс (60 000). */
+  loadTimeoutMs?: number
 }
 
 /**

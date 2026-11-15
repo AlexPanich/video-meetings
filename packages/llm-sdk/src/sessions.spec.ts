@@ -14,7 +14,7 @@ import {
   toolCallReply,
 } from './testing/ollama-mock.js'
 import type { OllamaRequestBody } from './testing/ollama-mock.js'
-import { DEFAULT_STORE_MAX_SESSIONS } from './sessions.js'
+import { DEFAULT_STORE_MAX_SESSIONS, projectKey } from './sessions.js'
 
 beforeEach(() => {
   stubOllamaEnv()
@@ -491,5 +491,179 @@ describe('sessionStore', () => {
         }),
       ),
     ).rejects.toThrow(sessionId)
+  })
+})
+
+describe('устойчивость сессий', () => {
+  /** Запись хранилища с сообщением в формате локального SDK. */
+  function entry(sessionId: string, message: Record<string, unknown>): SessionStoreEntry {
+    return {
+      type: 'ollama_message',
+      uuid: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      session_id: sessionId,
+      message,
+    }
+  }
+
+  it('переполнение контекста не сохраняет ход: следующий resume с коротким промптом — success', async () => {
+    vi.stubEnv('OLLAMA_NUM_CTX', '2048')
+    const store = new InMemorySessionStore()
+    scriptedOllama(ollamaReply('Запомнил'))
+    const sessionId = await runSession('Запомни слово СЛИВА', { sessionStore: store })
+
+    const overflowFetch = scriptedOllama(ollamaReply('Не должно быть'))
+    const overflow = lastResult(
+      await collect(
+        query({ prompt: 'x'.repeat(20_000), options: { sessionStore: store, resume: sessionId } }),
+      ),
+    )
+    expect(overflow.subtype).toBe('error_during_execution')
+    expect(overflowFetch).not.toHaveBeenCalled()
+
+    const fetchMock = scriptedOllama(ollamaReply('СЛИВА'))
+    await runSession('Какое слово?', { sessionStore: store, resume: sessionId })
+    expect(dialog(requests(fetchMock)[0])).toEqual([
+      'user: Запомни слово СЛИВА',
+      'assistant: Запомнил',
+      'user: Какое слово?',
+    ])
+  })
+
+  it('длинный диалог без инструментов: самые старые обмены схлопываются, а не ломают сессию', async () => {
+    vi.stubEnv('OLLAMA_NUM_CTX', '2048')
+    const store = new InMemorySessionStore()
+    scriptedOllama(ollamaReply('Ок'))
+    let sessionId = await runSession(`Первое ${'a'.repeat(1500)}`, { sessionStore: store })
+    for (const word of ['Второе', 'Третье']) {
+      scriptedOllama(ollamaReply('Ок'))
+      sessionId = await runSession(`${word} ${'b'.repeat(1500)}`, {
+        sessionStore: store,
+        resume: sessionId,
+      })
+    }
+
+    const fetchMock = scriptedOllama(ollamaReply('Ок'))
+    await runSession('Последнее', { sessionStore: store, resume: sessionId })
+
+    const sent = dialog(requests(fetchMock)[0])
+    expect(sent.at(-1)).toBe('user: Последнее')
+    expect(sent.some((line) => line.startsWith('user: Первое'))).toBe(false)
+    expect(sent.some((line) => /earlier messages .* omitted/.test(line))).toBe(true)
+  })
+
+  it('в сессии нет записей, понятных локальному SDK, — ошибка, а не пустая история', async () => {
+    const store = new InMemorySessionStore()
+    const sessionId = crypto.randomUUID()
+    // Так выглядят записи оригинала (провайдер anthropic) в общем хранилище.
+    await store.append({ projectKey: projectKey(), sessionId }, [
+      { type: 'user', uuid: crypto.randomUUID(), message: { role: 'user', content: 'Привет' } },
+    ])
+    const fetchMock = scriptedOllama(ollamaReply('Не должно быть'))
+
+    await expect(
+      collect(query({ prompt: 'Снова', options: { sessionStore: store, resume: sessionId } })),
+    ).rejects.toThrow(/no entries readable/)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('запись с tool_calls не той формы пропускается с предупреждением', async () => {
+    const warn = vi.spyOn(process, 'emitWarning').mockImplementation(() => {})
+    const store = new InMemorySessionStore()
+    const sessionId = crypto.randomUUID()
+    await store.append({ projectKey: projectKey(), sessionId }, [
+      entry(sessionId, { role: 'user', content: 'Привет' }),
+      entry(sessionId, { role: 'assistant', content: '', tool_calls: [{ name: 'broken' }] }),
+      entry(sessionId, { role: 'assistant', content: 'Здравствуйте' }),
+    ])
+    const fetchMock = scriptedOllama(ollamaReply('Ок'))
+
+    await runSession('Снова', { sessionStore: store, resume: sessionId })
+
+    expect(dialog(requests(fetchMock)[0])).toEqual([
+      'user: Привет',
+      'assistant: Здравствуйте',
+      'user: Снова',
+    ])
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/1 of 3 store entries/))
+    warn.mockRestore()
+  })
+
+  it('continue + forkSession: новая сессия с историей последней, исходная не меняется', async () => {
+    const store = new InMemorySessionStore()
+    scriptedOllama(ollamaReply('Запомнил'))
+    const sourceId = await runSession('Запомни слово ВИШНЯ', { sessionStore: store })
+    const before = store.getEntries({ projectKey: projectKey(), sessionId: sourceId })
+
+    const fetchMock = scriptedOllama(ollamaReply('ВИШНЯ'))
+    const forkId = await runSession('Какое слово?', {
+      sessionStore: store,
+      continue: true,
+      forkSession: true,
+    })
+
+    expect(forkId).not.toBe(sourceId)
+    expect(dialog(requests(fetchMock)[0])).toEqual([
+      'user: Запомни слово ВИШНЯ',
+      'assistant: Запомнил',
+      'user: Какое слово?',
+    ])
+    expect(store.getEntries({ projectKey: projectKey(), sessionId: sourceId })).toEqual(before)
+  })
+
+  it('persistSession: false — ход не сохраняется, resume такой сессии — ошибка', async () => {
+    scriptedOllama(ollamaReply('Ок'))
+    const sessionId = await runSession('Привет', { persistSession: false })
+
+    await expect(
+      collect(query({ prompt: 'Снова', options: { resume: sessionId } })),
+    ).rejects.toThrow(sessionId)
+  })
+
+  it('persistSession: false вместе с sessionStore — ошибка, как в оригинале', async () => {
+    const fetchMock = scriptedOllama(ollamaReply('Не должно быть'))
+
+    await expect(
+      collect(
+        query({
+          prompt: 'Привет',
+          options: { persistSession: false, sessionStore: new InMemorySessionStore() },
+        }),
+      ),
+    ).rejects.toThrow(/persistSession: false/)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('зависший sessionStore.load() — ошибка по loadTimeoutMs, а не вечное ожидание', async () => {
+    const store: SessionStore = {
+      append: async () => {},
+      load: () => new Promise(() => {}),
+    }
+
+    await expect(
+      collect(
+        query({
+          prompt: 'Привет',
+          options: { sessionStore: store, resume: crypto.randomUUID(), loadTimeoutMs: 50 },
+        }),
+      ),
+    ).rejects.toThrow(/sessionStore\.load\(\) timed out after 50 ms/)
+  })
+
+  it('зависший sessionStore.load() прерывается abortController', async () => {
+    const store: SessionStore = {
+      append: async () => {},
+      load: () => new Promise(() => {}),
+    }
+    const abortController = new AbortController()
+    const run = collect(
+      query({
+        prompt: 'Привет',
+        options: { sessionStore: store, resume: crypto.randomUUID(), abortController },
+      }),
+    )
+    setTimeout(() => abortController.abort(), 20)
+
+    await expect(run).rejects.toThrow()
   })
 })
