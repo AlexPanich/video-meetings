@@ -31,6 +31,7 @@ model Meeting {
   ownerId      String
   owner        User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   files        MeetingFile[]
+  summary      MeetingSummary?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -56,4 +57,25 @@ model MeetingFile {
   updatedAt   DateTime   @updatedAt
 
   @@index([meetingId])
+}
+
+// этапы фоновой задачи саммари; `transcribing` появится вместе с транскрибацией (фаза 7)
+enum SummaryStatus {
+  pending
+  generating
+  done
+  failed
+}
+
+// одна запись на встречу: `meetingId` уникален, поэтому активная задача у встречи одна,
+// а `result` хранит последнее успешное саммари и меняется только при следующем успехе
+model MeetingSummary {
+  id        String        @id @default(uuid())
+  meetingId String        @unique
+  meeting   Meeting       @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  status    SummaryStatus @default(pending)
+  result    Json?
+  error     String?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
 }
