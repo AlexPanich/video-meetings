@@ -6,6 +6,7 @@ import { MeetingsModule } from './meetings/meetings.module.js'
 import { PrismaModule } from './prisma/prisma.module.js'
 import { ProfileModule } from './profile/profile.module.js'
 import { RateLimitModule } from './rate-limit/rate-limit.module.js'
+import { SummaryModule } from './summary/summary.module.js'
 import { UsersModule } from './users/users.module.js'
 
 @Module({
@@ -17,6 +18,7 @@ import { UsersModule } from './users/users.module.js'
     MeetingsModule,
     FilesModule,
     ProfileModule,
+    SummaryModule,
   ],
   providers: [
     {
