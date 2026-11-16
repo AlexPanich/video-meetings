@@ -1,6 +1,7 @@
 import { NotFoundException } from '@nestjs/common'
 import type { CommandBus } from '@nestjs/cqrs'
 import { DeleteMeetingFilesCommand } from '../../files/commands/delete-meeting-files.command.js'
+import { CancelMeetingSummaryCommand } from '../../summary/commands/cancel-meeting-summary.command.js'
 import { DeleteMeetingCommand } from './delete-meeting.command.js'
 import { DeleteMeetingHandler } from './delete-meeting.handler.js'
 
@@ -12,12 +13,13 @@ describe('DeleteMeetingHandler', () => {
     return { prisma, commandBus, handler }
   }
 
-  it('удаляет встречу владельца и просит модуль files убрать её файлы с диска', async () => {
+  it('удаляет встречу владельца, отменяет её саммари и просит модуль files убрать файлы с диска', async () => {
     const { prisma, commandBus, handler } = setup(1)
 
     await handler.execute(new DeleteMeetingCommand('u1', 'm1'))
 
     expect(prisma.meeting.deleteMany).toHaveBeenCalledWith({ where: { id: 'm1', ownerId: 'u1' } })
+    expect(commandBus.execute).toHaveBeenCalledWith(new CancelMeetingSummaryCommand('m1'))
     expect(commandBus.execute).toHaveBeenCalledWith(new DeleteMeetingFilesCommand('m1'))
   })
 

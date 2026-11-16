@@ -2,6 +2,7 @@ import { NotFoundException } from '@nestjs/common'
 import { CommandBus, CommandHandler, type ICommandHandler } from '@nestjs/cqrs'
 import { DeleteMeetingFilesCommand } from '../../files/commands/delete-meeting-files.command.js'
 import { PrismaService } from '../../prisma/prisma.service.js'
+import { CancelMeetingSummaryCommand } from '../../summary/commands/cancel-meeting-summary.command.js'
 import { DeleteMeetingCommand } from './delete-meeting.command.js'
 
 @CommandHandler(DeleteMeetingCommand)
@@ -15,6 +16,8 @@ export class DeleteMeetingHandler implements ICommandHandler<DeleteMeetingComman
     // записи файлов удаляются каскадом вместе со встречей
     const { count } = await this.prisma.meeting.deleteMany({ where: { id, ownerId } })
     if (count === 0) throw new NotFoundException('Встреча не найдена')
+    // идущая генерация саммари больше не нужна: модуль summary отменяет её, чтобы не занимать GPU
+    await this.commandBus.execute(new CancelMeetingSummaryCommand(id))
     // физические файлы убирает модуль files
     await this.commandBus.execute(new DeleteMeetingFilesCommand(id))
   }

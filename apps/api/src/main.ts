@@ -9,6 +9,8 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule)
   // от этого зависит req.ip, а значит и rate limiting: без явной настройки X-Forwarded-For не доверяем
   app.set('trust proxy', parseTrustProxy(process.env.TRUST_PROXY))
+  // по SIGTERM/SIGINT вызываются хуки остановки: SummaryRunner отменяет идущие задачи саммари
+  app.enableShutdownHooks()
   setupSecurity(app)
   setupSwagger(app)
   // загрузка до 500 МиБ на медленном канале идёт дольше 5 минут (дефолт Node): лимит по времени снимаем
