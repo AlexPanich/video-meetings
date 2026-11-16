@@ -13,11 +13,18 @@
     "target": "ES2023",
     "sourceMap": true,
     "outDir": "./dist",
-    "rootDir": ".",
+    // корень монорепо: `paths` ниже подключают исходники packages/*; сборка задаёт свой rootDir
+    "rootDir": "../..",
     "incremental": true,
     "skipLibCheck": true,
     "strict": true,
     "strictPropertyInitialization": false,
-    "types": ["vitest/globals", "node"]
+    "types": ["vitest/globals", "node"],
+    // линт и vitest берут исходники пакетов: им не нужна предварительная сборка. `nest build`
+    // (tsconfig.build.json) сбрасывает `paths` и берёт `dist` пакетов через exports
+    "paths": {
+      "@video-meetings/llm": ["../../packages/llm/src/index.ts"],
+      "@video-meetings/llm-sdk": ["../../packages/llm-sdk/src/index.ts"]
+    }
   }
 }
