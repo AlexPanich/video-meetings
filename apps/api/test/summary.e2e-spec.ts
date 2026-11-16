@@ -159,6 +159,18 @@ describe('Meeting summary (e2e)', () => {
       await waitForStatus(auth, meetingId, 'done')
     })
 
+    it('из двух параллельных запусков проходит один, второй — 409', async () => {
+      const auth = await createUser()
+      const meetingId = await meetingWithNotes(auth)
+
+      const statuses = (await Promise.all([start(auth, meetingId), start(auth, meetingId)]))
+        .map((response) => response.status)
+        .sort()
+
+      expect(statuses).toEqual([202, 409])
+      await waitForStatus(auth, meetingId, 'done')
+    })
+
     it('пересоздание заменяет старое саммари только после успеха', async () => {
       const auth = await createUser()
       const meetingId = await meetingWithNotes(auth)
@@ -259,6 +271,30 @@ describe('Meeting summary (e2e)', () => {
 
     const prisma = app.get(PrismaService)
     expect(await prisma.meetingSummary.findUnique({ where: { meetingId } })).toBeNull()
+  })
+
+  it('удаление встречи во время генерации отменяет запрос к модели', async () => {
+    const auth = await createUser()
+    const meetingId = await meetingWithNotes(auth)
+    let aborted!: () => void
+    const abortedRequest = new Promise<void>((resolve) => (aborted = resolve))
+    // запрос висит, пока его не отменят
+    llm.enqueue(
+      (_body, signal) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => {
+            aborted()
+            reject(new DOMException('aborted', 'AbortError'))
+          })
+        }),
+    )
+    const requestsBefore = llm.requests.length
+
+    await start(auth, meetingId).expect(202)
+    await vi.waitFor(() => expect(llm.requests.length).toBeGreaterThan(requestsBefore))
+    await http().delete(`/meetings/${meetingId}`).set('Authorization', auth).expect(204)
+
+    await abortedRequest
   })
 
   it('после рестарта api зависшая задача помечается failed, прежний результат остаётся', async () => {

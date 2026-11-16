@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common'
 import { CqrsModule } from '@nestjs/cqrs'
 import { AuthModule } from '../auth/auth.module.js'
+import { CancelMeetingSummaryHandler } from './commands/cancel-meeting-summary.handler.js'
 import { StartSummaryHandler } from './commands/start-summary.handler.js'
 import { GetSummaryHandler } from './queries/get-summary.handler.js'
 import { StaleSummariesCleaner } from './stale-summaries.cleaner.js'
@@ -13,6 +14,7 @@ import { SummaryRunner } from './summary-runner.js'
   controllers: [SummaryController],
   providers: [
     StartSummaryHandler,
+    CancelMeetingSummaryHandler,
     GetSummaryHandler,
     SummaryAgent,
     SummaryRunner,

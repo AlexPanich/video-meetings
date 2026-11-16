@@ -10,7 +10,7 @@ import {
   toolCallReply,
   type LlmMock,
 } from '../../test/support/llm-mock.js'
-import { SummaryAgent } from './summary-agent.js'
+import { readChunk, SummaryAgent } from './summary-agent.js'
 
 // инструменты SDK-сервера `meeting` видны модели под полными именами
 const LIST_FILES = 'mcp__meeting__list_files'
@@ -190,6 +190,63 @@ describe('SummaryAgent', () => {
     }
   })
 
+  it('без текстовых файлов — SummaryError без запроса к модели; неготовые файлы в skippedFiles не теряются', async () => {
+    const meetingId = randomUUID()
+    const video = await store(meetingId, 'call.mp4', 'MP4', 'video/mp4')
+    const uploading = {
+      ...(await store(meetingId, 'late.txt', 'ещё грузится')),
+      status: 'uploading' as const,
+    }
+
+    await expect(
+      new SummaryAgent(prismaWith([video, uploading]) as never).run(
+        meetingId,
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow(/нет текстовых файлов/)
+    expect(llm.requests).toHaveLength(0)
+  })
+
+  it('файл, который ещё грузится, не читается, а попадает в skippedFiles', async () => {
+    const meetingId = randomUUID()
+    const notes = await store(meetingId, 'notes.txt', 'заметки')
+    const uploading = {
+      ...(await store(meetingId, 'late.txt', 'ещё грузится')),
+      status: 'uploading' as const,
+    }
+    llm.enqueue(
+      toolCallReply(LIST_FILES),
+      toolCallReply(READ_FILE, { fileId: uploading.id }),
+      summaryReply(),
+    )
+
+    const result = await new SummaryAgent(prismaWith([notes, uploading]) as never).run(
+      meetingId,
+      new AbortController().signal,
+    )
+
+    expect(result.skippedFiles).toEqual([{ id: uploading.id, name: 'late.txt' }])
+    expect(JSON.stringify(toolMessages(llm, 1))).not.toContain(uploading.id)
+    expect(JSON.stringify(toolMessages(llm, 2))).not.toContain('ещё грузится')
+  })
+
+  it('отмена до запуска модели не уходит в Ollama', async () => {
+    const meetingId = randomUUID()
+    const notes = await store(meetingId, 'notes.txt', 'текст')
+    const controller = new AbortController()
+    const prisma = prismaWith([notes])
+    // сигнал отменяется, пока агент ждёт список файлов из БД
+    prisma.meetingFile.findMany.mockImplementationOnce(() => {
+      controller.abort()
+      return Promise.resolve([notes])
+    })
+
+    await expect(
+      new SummaryAgent(prisma as never).run(meetingId, controller.signal),
+    ).rejects.toThrow()
+    expect(llm.requests).toHaveLength(0)
+  })
+
   it('прерывается по сигналу отмены', async () => {
     const meetingId = randomUUID()
     const notes = await store(meetingId, 'notes.txt', 'текст')
@@ -205,5 +262,84 @@ describe('SummaryAgent', () => {
     await expect(
       new SummaryAgent(prismaWith([notes]) as never).run(meetingId, controller.signal),
     ).rejects.toThrow()
+  })
+})
+
+describe('readChunk', () => {
+  let dir: string
+  let path: string
+
+  const write = async (content: string) => {
+    await writeFile(path, content)
+    return Buffer.byteLength(content)
+  }
+
+  // читает файл по nextOffset до done, как велит системный промпт
+  const readAll = async (limit: number) => {
+    const parts: string[] = []
+    let offset = 0
+    for (let step = 0; step < 1_000; step++) {
+      const chunk = await readChunk(path, offset, limit)
+      parts.push(chunk.content)
+      expect(chunk.offset).toBe(offset)
+      if (chunk.done) return parts
+      expect(chunk.nextOffset).toBeGreaterThan(offset)
+      offset = chunk.nextOffset
+    }
+    throw new Error('чтение не продвигается')
+  }
+
+  beforeEach(async () => {
+    dir = join(tmpdir(), `read-chunk-${randomUUID()}`)
+    await mkdir(dir, { recursive: true })
+    path = join(dir, 'file.txt')
+  })
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  it('последовательное чтение по nextOffset склеивается в исходный файл', async () => {
+    const content = 'строка латиницей и кириллицей\n'.repeat(200)
+    await write(content)
+
+    const parts = await readAll(1024)
+
+    expect(parts.length).toBeGreaterThan(1)
+    expect(parts.join('')).toBe(content)
+  })
+
+  it('граница limit посреди многобайтового символа не режет и не теряет его', async () => {
+    // 'я' — 2 байта, эмодзи — 4: при любом limit граница рано или поздно попадает внутрь символа
+    const content = 'a' + 'я😀'.repeat(700)
+    await write(content)
+
+    for (const limit of [1024, 1025, 1026, 1027]) {
+      const parts = await readAll(limit)
+      expect(parts.join('')).toBe(content)
+      for (const part of parts) expect(part).not.toContain('\uFFFD')
+    }
+  })
+
+  it('offset посреди символа сдвигается к началу следующего', async () => {
+    await write('яя')
+
+    const chunk = await readChunk(path, 1, 1024)
+
+    expect(chunk).toMatchObject({ offset: 2, nextOffset: 4, done: true, content: 'я' })
+  })
+
+  it('offset за концом файла и пустой файл — пустая часть с done', async () => {
+    const size = await write('abc')
+    expect(await readChunk(path, 100, 1024)).toMatchObject({
+      offset: size,
+      nextOffset: size,
+      size,
+      done: true,
+      content: '',
+    })
+
+    await write('')
+    expect(await readChunk(path, 0, 1024)).toMatchObject({ size: 0, done: true, content: '' })
   })
 })

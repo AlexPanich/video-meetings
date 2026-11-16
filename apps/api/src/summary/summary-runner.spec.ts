@@ -111,9 +111,81 @@ describe('SummaryRunner', () => {
 
     const running = runner.run('meeting-1')
     await vi.waitFor(() => expect(agent.run).toHaveBeenCalled())
-    await runner.onApplicationShutdown()
+    await runner.onModuleDestroy()
     await running
 
     expect(agent.run.mock.calls[0][1].aborted).toBe(true)
+  })
+
+  it('генерирует не больше SUMMARY_CONCURRENCY задач одновременно, остальные ждут в pending', async () => {
+    vi.stubEnv('SUMMARY_CONCURRENCY', '1')
+    const prisma = prismaMock()
+    const finishers: (() => void)[] = []
+    const agent = {
+      run: vi.fn<(meetingId: string) => Promise<unknown>>(
+        () =>
+          new Promise((resolve) => {
+            finishers.push(() => resolve(RESULT))
+          }),
+      ),
+    }
+    const runner = new SummaryRunner(prisma as never, agent as never)
+
+    const first = runner.run('meeting-1')
+    const second = runner.run('meeting-2')
+    await vi.waitFor(() => expect(agent.run).toHaveBeenCalledTimes(1))
+    // вторая задача ещё в очереди: в generating не переводилась
+    expect(writes(prisma)).toEqual([{ status: 'generating' }])
+
+    finishers[0]()
+    await first
+    await vi.waitFor(() => expect(agent.run).toHaveBeenCalledTimes(2))
+    expect(agent.run.mock.calls[1][0]).toBe('meeting-2')
+    finishers[1]()
+    await second
+    expect(writes(prisma).map((data) => data.status)).toEqual([
+      'generating',
+      'done',
+      'generating',
+      'done',
+    ])
+  })
+
+  it('задача, отменённая в очереди, помечается failed из pending и не запускает агента', async () => {
+    vi.stubEnv('SUMMARY_CONCURRENCY', '1')
+    const prisma = prismaMock()
+    const agent = abortableAgent()
+    const runner = new SummaryRunner(prisma as never, agent as never)
+
+    const first = runner.run('meeting-1')
+    const queued = runner.run('meeting-2')
+    await vi.waitFor(() => expect(agent.run).toHaveBeenCalledTimes(1))
+    await runner.onModuleDestroy()
+    await Promise.all([first, queued])
+
+    expect(agent.run).toHaveBeenCalledTimes(1)
+    expect(prisma.meetingSummary.updateMany).toHaveBeenCalledWith({
+      where: { meetingId: 'meeting-2', status: 'pending' },
+      data: expect.objectContaining({ status: 'failed' }) as unknown,
+    })
+  })
+
+  it('cancel отменяет только задачу удалённой встречи', async () => {
+    const prisma = prismaMock()
+    vi.stubEnv('SUMMARY_CONCURRENCY', '2')
+    const agent = abortableAgent()
+    const runner = new SummaryRunner(prisma as never, agent as never)
+
+    const deleted = runner.run('meeting-1')
+    void runner.run('meeting-2')
+    await vi.waitFor(() => expect(agent.run).toHaveBeenCalledTimes(2))
+    await runner.cancel('meeting-1')
+    await deleted
+
+    const signalOf = (meetingId: string) =>
+      agent.run.mock.calls.find(([id]) => id === meetingId)?.[1]
+    expect(signalOf('meeting-1')?.aborted).toBe(true)
+    expect(signalOf('meeting-2')?.aborted).toBe(false)
+    await runner.onModuleDestroy()
   })
 })

@@ -1,8 +1,20 @@
 import { z } from 'zod'
-import type { MeetingSummary } from '../generated/prisma/client.js'
+import type { MeetingSummary, SummaryStatus } from '../generated/prisma/client.js'
 
-// задача, которая уже идёт: второй запуск в это время — 409
-export const ACTIVE_SUMMARY_STATUSES = ['pending', 'generating'] as const
+// активна ли задача в этом статусе: второй запуск в это время — 409, при старте api такие задачи
+// закрываются как прерванные. Новый статус (`transcribing` в фазе 7) без решения не скомпилируется
+const SUMMARY_STATUS_ACTIVE = {
+  pending: true,
+  generating: true,
+  done: false,
+  failed: false,
+} as const satisfies Record<SummaryStatus, boolean>
+
+export const SUMMARY_STATUSES = Object.keys(SUMMARY_STATUS_ACTIVE) as SummaryStatus[]
+
+export const ACTIVE_SUMMARY_STATUSES = SUMMARY_STATUSES.filter(
+  (status) => SUMMARY_STATUS_ACTIVE[status],
+)
 
 // поля ответа модели: из схемы строится JSON Schema для `outputFormat`, ею же проверяется ответ;
 // описания полей повторяются в системном промпте (Qwen заполняет поля точнее)

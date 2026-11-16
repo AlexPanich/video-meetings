@@ -60,7 +60,7 @@ const textResult = (value: unknown, isError = false): CallToolResult => ({
 })
 
 // часть файла по байтам, границы сдвигаются к целым символам UTF-8
-async function readChunk(path: string, offset: number, limit: number) {
+export async function readChunk(path: string, offset: number, limit: number) {
   const handle = await open(path, 'r')
   try {
     const { size } = await handle.stat()
@@ -97,10 +97,13 @@ export class SummaryAgent {
    */
   async run(meetingId: string, signal: AbortSignal): Promise<SummaryResult> {
     signal.throwIfAborted()
-    const files = await this.uploadedFiles(meetingId)
-    const sources = files.filter((file) => isSummarySource(file.name))
+    // источники фиксируются на старте: файл, загруженный во время генерации, не попадёт ни в
+    // list_files, ни в read_file, а окажется в `skippedFiles` только при следующем запуске
+    const files = await this.meetingFiles(meetingId)
+    const sources = files.filter((file) => file.status === 'uploaded' && isSummarySource(file.name))
+    // всё, что не источник, — в том числе файлы, которые ещё грузятся или не загрузились
     const skippedFiles: SkippedFile[] = files
-      .filter((file) => !isSummarySource(file.name))
+      .filter((file) => !sources.includes(file))
       .map(({ id, name }) => ({ id, name }))
     if (sources.length === 0) {
       throw new SummaryError(
@@ -111,6 +114,8 @@ export class SummaryAgent {
     const abortController = new AbortController()
     const abort = () => abortController.abort(signal.reason)
     signal.addEventListener('abort', abort, { once: true })
+    // отмена могла прийти во время запроса к БД: событие `abort` уже не повторится
+    if (signal.aborted) abort()
     try {
       const messages = query({
         prompt: `Составь саммари встречи. Текстовых файлов: ${sources.length}.`,
@@ -119,7 +124,7 @@ export class SummaryAgent {
           // встроенные инструменты Claude Agent SDK (Bash, Read…) отключены, разрешены только
           // инструменты встречи
           tools: [],
-          mcpServers: { [SERVER_NAME]: this.server(meetingId) },
+          mcpServers: { [SERVER_NAME]: this.server(meetingId, sources) },
           allowedTools: SUMMARY_TOOLS,
           maxTurns: MAX_TURNS,
           outputFormat: { type: 'json_schema', schema: SUMMARY_JSON_SCHEMA },
@@ -148,28 +153,26 @@ export class SummaryAgent {
     }
   }
 
-  private uploadedFiles(meetingId: string): Promise<MeetingFile[]> {
+  private meetingFiles(meetingId: string): Promise<MeetingFile[]> {
     return this.prisma.meetingFile.findMany({
-      where: { meetingId, status: 'uploaded' },
+      where: { meetingId },
       orderBy: { createdAt: 'asc' },
     })
   }
 
-  // инструменты видят только файлы этой встречи: `meetingId` берётся из задачи, а не из аргументов
-  // модели, и каждый `fileId` проверяется по БД
-  private server(meetingId: string) {
+  // инструменты видят только источники этой встречи, зафиксированные на старте: `meetingId`
+  // берётся из задачи, а не из аргументов модели, и каждый `fileId` ещё раз проверяется по БД
+  // (файл могли удалить во время генерации)
+  private server(meetingId: string, sources: MeetingFile[]) {
+    const sourceIds = new Set(sources.map((file) => file.id))
     const listFiles = tool(
       LIST_FILES,
       'Список текстовых файлов встречи: fileId, name, size (байты)',
       {},
-      async () => {
-        const files = await this.uploadedFiles(meetingId)
-        return textResult(
-          files
-            .filter((file) => isSummarySource(file.name))
-            .map(({ id, name, size }) => ({ fileId: id, name, size })),
-        )
-      },
+      () =>
+        Promise.resolve(
+          textResult(sources.map(({ id, name, size }) => ({ fileId: id, name, size }))),
+        ),
     )
     const readFile = tool(
       READ_FILE,
@@ -192,10 +195,12 @@ export class SummaryAgent {
           .describe(`Сколько байт прочитать, по умолчанию ${DEFAULT_READ_LIMIT}`),
       },
       async ({ fileId, offset = 0, limit = DEFAULT_READ_LIMIT }) => {
-        const file = await this.prisma.meetingFile.findFirst({
-          where: { id: fileId, meetingId, status: 'uploaded' },
-        })
-        if (!file || !isSummarySource(file.name)) {
+        const file = sourceIds.has(fileId)
+          ? await this.prisma.meetingFile.findFirst({
+              where: { id: fileId, meetingId, status: 'uploaded' },
+            })
+          : null
+        if (!file) {
           return textResult({ error: 'Файл не найден среди текстовых файлов встречи' }, true)
         }
         try {
