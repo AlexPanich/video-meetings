@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { notFound, redirect } from 'next/navigation'
 import { LocalDateTime } from '@/components/local-date-time'
 import { MeetingFiles } from '@/components/meeting-files'
+import { MeetingSummary } from '@/components/meeting-summary'
 import { formatParticipants } from '@/lib/format'
 import { getMeeting } from '@/lib/server/meetings'
 
@@ -31,6 +32,7 @@ export async function MeetingDetails({ params }: { params: Promise<{ id: string 
               {formatParticipants(result.data.participants.length)}
             </p>
           </div>
+          <MeetingSummary key={`summary-${result.data.id}`} meetingId={result.data.id} />
           <MeetingFiles key={result.data.id} meetingId={result.data.id} />
         </>
       ) : (

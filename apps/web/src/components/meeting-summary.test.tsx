@@ -206,6 +206,58 @@ describe('MeetingSummary', () => {
     expect(await screen.findByText('Готово')).toBeInTheDocument()
   })
 
+  it('после нескольких сбоев опроса подряд он останавливается, «Обновить» запускает снова', async () => {
+    api([
+      { body: summary({ status: 'generating', result: null }) },
+      { body: { message: 'Bad Gateway' }, status: 502 },
+      { body: { message: 'Bad Gateway' }, status: 502 },
+      { body: { message: 'Bad Gateway' }, status: 502 },
+      { body: { message: 'Bad Gateway' }, status: 502 },
+      { body: { message: 'Bad Gateway' }, status: 502 },
+      { body: summary() },
+    ])
+    renderSummary()
+
+    const refresh = await screen.findByRole('button', { name: 'Обновить' })
+    expect(screen.getByText('Не удалось обновить статус саммари')).toBeInTheDocument()
+    const calls = fetchMock.mock.calls.length
+    await pause(POLL * 5)
+    expect(fetchMock.mock.calls.length).toBe(calls)
+
+    await userEvent.setup().click(refresh)
+    expect(await screen.findByText('Готово')).toBeInTheDocument()
+    expect(screen.queryByText('Не удалось обновить статус саммари')).not.toBeInTheDocument()
+  })
+
+  it('в скрытой вкладке опрос на паузе и продолжается, когда её открывают', async () => {
+    let visibility: DocumentVisibilityState = 'visible'
+    vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visibility)
+    api([{ body: summary({ status: 'generating', result: null }) }, { body: summary() }])
+    renderSummary()
+
+    await screen.findByText('Генерация')
+    visibility = 'hidden'
+    const calls = fetchMock.mock.calls.length
+    await pause(POLL * 5)
+    expect(fetchMock.mock.calls.length).toBe(calls)
+
+    visibility = 'visible'
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    expect(await screen.findByText('Готово')).toBeInTheDocument()
+    vi.restoreAllMocks()
+  })
+
+  it('при failed — одна кнопка запуска: «Повторить» у причины', async () => {
+    api([{ body: summary({ status: 'failed', error: 'Сбой' }) }])
+    renderSummary()
+
+    await screen.findByRole('alert')
+    expect(screen.queryByRole('button', { name: 'Пересоздать саммари' })).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button')).toHaveLength(1)
+  })
+
   it('блок саммари: резюме, решения, задачи (что, кто, срок), открытые вопросы, неучтённые файлы', async () => {
     api([{ body: summary() }])
     renderSummary()
