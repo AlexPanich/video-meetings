@@ -110,6 +110,17 @@ describe('WhisperClient', () => {
     expect(await retryable(429)).toBe(true)
   })
 
+  it('whisper.cpp: 500 «FFmpeg conversion failed» (видео без звука, битый файл) — retryable = false', async () => {
+    const path = await audioFile(Buffer.from('not a media file'))
+    whisper.enqueue(whisperErrorReply(500, '{"error":"FFmpeg conversion failed."}'))
+
+    const error = await transcribe(path).catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(TranscriptionError)
+    expect((error as TranscriptionError).retryable).toBe(false)
+    expect((error as Error).message).not.toContain('FFmpeg')
+  })
+
   it('передаёт язык из WHISPER_LANGUAGE, без него — автоопределение', async () => {
     const path = await audioFile(Buffer.from('ID3 fake audio'))
 

@@ -234,13 +234,13 @@ describe('Transcription for meeting summary (e2e)', { timeout: 20_000 }, () => {
     expect(done.result).toMatchObject({ summary: SAMPLE_SUMMARY.summary })
   })
 
-  it('файл, который Whisper отклонил (4xx), — в skippedFiles, саммари по остальным', async () => {
+  it('файл, который Whisper не может обработать, — в skippedFiles, саммари по остальным', async () => {
     const auth = await createUser()
     const meetingId = await createMeeting(auth)
     await upload(auth, meetingId, Buffer.from('Повестка: демо.'), 'agenda.txt', 'text/plain')
     const videoId = await upload(auth, meetingId, VIDEO, 'screen.mp4', 'video/mp4')
-    // видео без звуковой дорожки: whisper-server отвечает 400
-    whisper.setFallback(whisperErrorReply(400, 'no audio stream'))
+    // видео без звуковой дорожки: whisper-server с --convert отвечает так (проверено вживую)
+    whisper.setFallback(whisperErrorReply(500, '{"error":"FFmpeg conversion failed."}'))
 
     await start(auth, meetingId).expect(202)
     const done = await waitForStatus(auth, meetingId, 'done')

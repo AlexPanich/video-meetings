@@ -44,9 +44,16 @@ export class TranscriptionError extends Error {
   }
 }
 
-// 4xx — сервис отклонил сам файл (нет звуковой дорожки, неподдерживаемый формат); таймаут и
-// лимит запросов проходят при повторе
+// 4xx — сервис отклонил сам файл; таймаут и лимит запросов проходят при повторе
 const isRetryableStatus = (status: number) => status >= 500 || status === 408 || status === 429
+
+// whisper.cpp `--convert` на файл, из которого ffmpeg не достал звук (видео без аудиодорожки,
+// битый или не медиафайл), отвечает не 4xx, а 500 `{"error":"FFmpeg conversion failed."}`
+// (проверено на живом whisper-server): повтор с тем же файлом даст то же самое
+const UNCONVERTIBLE_FILE = /ffmpeg conversion failed/i
+
+const isRetryableResponse = (status: number, body: string) =>
+  isRetryableStatus(status) && !UNCONVERTIBLE_FILE.test(body)
 
 export interface TranscriptSegment {
   start: number
@@ -220,7 +227,7 @@ export class WhisperClient {
         const text = await response.text().catch(() => '')
         throw new TranscriptionError(
           `Сервис транскрибации вернул ошибку (HTTP ${response.status})`,
-          { cause: text.slice(0, 1000), retryable: isRetryableStatus(response.status) },
+          { cause: text.slice(0, 1000), retryable: isRetryableResponse(response.status, text) },
         )
       }
       let json: unknown
