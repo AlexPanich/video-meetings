@@ -71,6 +71,60 @@ export const toolCallReply =
   () =>
     Promise.resolve(chatReply('', { tool_calls: [{ function: { name, arguments: args } }] }))
 
+interface ListedFile {
+  fileId: string
+}
+
+interface ReadChunkResult {
+  fileId: string
+  nextOffset: number
+  done: boolean
+}
+
+const parseToolResult = (content: string): unknown => {
+  try {
+    return JSON.parse(content)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Модель, которая честно читает материалы встречи: `list_files`, затем каждый файл из списка через
+ * `read_file` по `nextOffset` до `done`, затем саммари. Решение принимается по сообщениям запроса,
+ * без состояния, поэтому годится как `fallback` для нескольких задач подряд.
+ */
+export const readAllFilesReply =
+  (summary: SummaryJson = SAMPLE_SUMMARY, limit = 20_000): MockHandler =>
+  (body, signal) => {
+    const tools = body.messages.filter((message) => message.role === 'tool')
+    const listed = tools
+      .map((message) => parseToolResult(message.content))
+      .find((value): value is ListedFile[] => Array.isArray(value))
+    const last = tools.length > 0 ? parseToolResult(tools.at(-1)!.content) : undefined
+    const read = (fileId: string, offset: number) =>
+      toolCallReply('mcp__meeting__read_file', { fileId, offset, limit })(body, signal)
+
+    if (!listed) return toolCallReply('mcp__meeting__list_files')(body, signal)
+    if (Array.isArray(last)) {
+      return listed.length > 0 ? read(listed[0].fileId, 0) : summaryReply(summary)(body, signal)
+    }
+    const chunk = last as ReadChunkResult | undefined
+    if (chunk && typeof chunk.fileId === 'string' && chunk.done === false) {
+      return read(chunk.fileId, chunk.nextOffset)
+    }
+    const index = listed.findIndex((file) => file.fileId === chunk?.fileId)
+    const next = index >= 0 ? listed[index + 1] : undefined
+    return next ? read(next.fileId, 0) : summaryReply(summary)(body, signal)
+  }
+
+/** Все результаты инструментов, которые видела модель, одной строкой. */
+export const toolResultsText = (requests: OllamaRequestBody[]) =>
+  requests
+    .flatMap((body) => body.messages.filter((message) => message.role === 'tool'))
+    .map((message) => message.content)
+    .join('\n')
+
 /** HTTP-ошибка Ollama. */
 export const httpErrorReply =
   (status = 500, text = 'model crashed'): MockHandler =>

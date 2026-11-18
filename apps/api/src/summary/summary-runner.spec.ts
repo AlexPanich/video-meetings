@@ -1,4 +1,5 @@
 import { SAMPLE_SUMMARY } from '../../test/support/llm-mock.js'
+import { TranscriptionError } from '../transcription/whisper-client.js'
 import { SummaryRunner } from './summary-runner.js'
 
 const RESULT = { ...SAMPLE_SUMMARY, skippedFiles: [{ id: 'f-pdf', name: 'slides.pdf' }] }
@@ -187,5 +188,111 @@ describe('SummaryRunner', () => {
     expect(signalOf('meeting-1')?.aborted).toBe(true)
     expect(signalOf('meeting-2')?.aborted).toBe(false)
     await runner.onModuleDestroy()
+  })
+})
+
+// этап `transcribing` (фаза 7): транскрибатор вызывается до агента в том же слоте генерации
+describe('SummaryRunner: транскрибация', () => {
+  const TRANSCRIPTS = [{ fileId: 'f-mp3', name: 'call.mp3', text: 'Решили выпустить релиз.' }]
+
+  type Prepare = (
+    meetingId: string,
+    signal: AbortSignal,
+    onTranscribing: () => Promise<void>,
+  ) => Promise<unknown>
+
+  // транскрибатор, которому есть что транскрибировать: сообщает о начале этапа
+  const transcribingTranscriber = () => ({
+    prepare: vi.fn<Prepare>(async (_meetingId, _signal, onTranscribing) => {
+      await onTranscribing()
+      return TRANSCRIPTS
+    }),
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('pending → transcribing → generating → done, агент получает транскрипты', async () => {
+    const prisma = prismaMock()
+    const agent = { run: vi.fn().mockResolvedValue(RESULT) }
+    const transcriber = transcribingTranscriber()
+
+    await new SummaryRunner(prisma as never, agent as never, transcriber as never).run('meeting-1')
+
+    expect(transcriber.prepare).toHaveBeenCalledWith(
+      'meeting-1',
+      expect.any(AbortSignal),
+      expect.any(Function),
+    )
+    expect(agent.run).toHaveBeenCalledWith('meeting-1', expect.any(AbortSignal), TRANSCRIPTS)
+    expect(writes(prisma).map((data) => data.status)).toEqual([
+      'transcribing',
+      'generating',
+      'done',
+    ])
+    // каждый переход — только из своего предыдущего статуса
+    expect(prisma.meetingSummary.updateMany).toHaveBeenCalledWith({
+      where: { meetingId: 'meeting-1', status: 'pending' },
+      data: { status: 'transcribing' },
+    })
+    expect(prisma.meetingSummary.updateMany).toHaveBeenCalledWith({
+      where: { meetingId: 'meeting-1', status: 'transcribing' },
+      data: { status: 'generating' },
+    })
+  })
+
+  it('нечего транскрибировать (нет медиа или транскрипты уже есть) — сразу generating', async () => {
+    const prisma = prismaMock()
+    const agent = { run: vi.fn().mockResolvedValue(RESULT) }
+    const transcriber = { prepare: vi.fn<Prepare>().mockResolvedValue(TRANSCRIPTS) }
+
+    await new SummaryRunner(prisma as never, agent as never, transcriber as never).run('meeting-1')
+
+    expect(writes(prisma).map((data) => data.status)).toEqual(['generating', 'done'])
+    expect(agent.run).toHaveBeenCalledWith('meeting-1', expect.any(AbortSignal), TRANSCRIPTS)
+  })
+
+  it('ошибка транскрибации → failed с её текстом из transcribing, агент не запускается', async () => {
+    const prisma = prismaMock()
+    const agent = { run: vi.fn().mockResolvedValue(RESULT) }
+    const message = 'Не удалось транскрибировать call.mp3: сервис транскрибации недоступен'
+    const transcriber = {
+      prepare: vi.fn<Prepare>(async (_meetingId, _signal, onTranscribing) => {
+        await onTranscribing()
+        throw new TranscriptionError(message)
+      }),
+    }
+
+    await new SummaryRunner(prisma as never, agent as never, transcriber as never).run('meeting-1')
+
+    expect(agent.run).not.toHaveBeenCalled()
+    expect(prisma.meetingSummary.updateMany).toHaveBeenLastCalledWith({
+      where: { meetingId: 'meeting-1', status: 'transcribing' },
+      data: { status: 'failed', error: message },
+    })
+  })
+
+  it('остановка api во время транскрибации отменяет её и помечает задачу failed', async () => {
+    const prisma = prismaMock()
+    const agent = { run: vi.fn().mockResolvedValue(RESULT) }
+    const transcriber = {
+      prepare: vi.fn<Prepare>(async (_meetingId, signal, onTranscribing) => {
+        await onTranscribing()
+        return new Promise<never>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+        })
+      }),
+    }
+    const runner = new SummaryRunner(prisma as never, agent as never, transcriber as never)
+
+    const running = runner.run('meeting-1')
+    await vi.waitFor(() => expect(writes(prisma)).toEqual([{ status: 'transcribing' }]))
+    await runner.onModuleDestroy()
+    await running
+
+    expect(transcriber.prepare.mock.calls[0][1].aborted).toBe(true)
+    expect(agent.run).not.toHaveBeenCalled()
+    expect(lastWrite(prisma)).toMatchObject({ status: 'failed' })
   })
 })
