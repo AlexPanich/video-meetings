@@ -32,9 +32,21 @@ export const getWhisperTimeoutMs = () => {
 
 /**
  * Ошибка транскрибации, текст которой можно показать владельцу встречи: без адреса сервиса и его
- * ответа (они — в `cause`, для лога).
+ * ответа (они — в `cause`, для лога). `retryable: false` — повтор с тем же файлом даст то же
+ * самое (сервис отклонил файл, ответ не разобрать): файл не учитывается, а не роняет задачу.
  */
-export class TranscriptionError extends Error {}
+export class TranscriptionError extends Error {
+  readonly retryable: boolean
+
+  constructor(message: string, options: ErrorOptions & { retryable?: boolean } = {}) {
+    super(message, options)
+    this.retryable = options.retryable ?? true
+  }
+}
+
+// 4xx — сервис отклонил сам файл (нет звуковой дорожки, неподдерживаемый формат); таймаут и
+// лимит запросов проходят при повторе
+const isRetryableStatus = (status: number) => status >= 500 || status === 408 || status === 429
 
 export interface TranscriptSegment {
   start: number
@@ -81,7 +93,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
  */
 export function normalizeWhisperResponse(body: unknown): WhisperTranscript {
   if (!isRecord(body) || typeof body.text !== 'string') {
-    throw new TranscriptionError('Сервис транскрибации вернул некорректный ответ')
+    throw new TranscriptionError('Сервис транскрибации вернул некорректный ответ', {
+      retryable: false,
+    })
   }
   const segments = Array.isArray(body.segments) ? body.segments : []
   return {
@@ -101,26 +115,35 @@ export function normalizeWhisperResponse(body: unknown): WhisperTranscript {
 // значение параметра в заголовке части: кавычки и переводы строк сломали бы разметку multipart
 const quoted = (value: string) => `"${value.replace(/["\\\r\n]/g, '_')}"`
 
-// multipart/form-data потоком: текстовые поля, затем файл с диска, затем закрывающая граница
+// multipart/form-data потоком: текстовые поля, затем файл с диска, затем закрывающая граница.
+// Длина считается заранее: с `Content-Length` тело не уходит chunked (его принимают не все
+// серверы и прокси), а сервер может отклонить слишком большой файл по заголовку
 function multipartBody(
   boundary: string,
   fields: Record<string, string>,
-  file: { filename: string; mimeType: string; stream: Readable },
-): Readable {
-  async function* parts() {
-    for (const [name, value] of Object.entries(fields)) {
-      yield Buffer.from(
+  file: { filename: string; mimeType: string; size: number; stream: Readable },
+): { body: Readable; length: number } {
+  const head = Buffer.concat([
+    ...Object.entries(fields).map(([name, value]) =>
+      Buffer.from(
         `--${boundary}\r\nContent-Disposition: form-data; name=${quoted(name)}\r\n\r\n${value}\r\n`,
-      )
-    }
-    yield Buffer.from(
+      ),
+    ),
+    Buffer.from(
       `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename=${quoted(file.filename)}\r\n` +
         `Content-Type: ${file.mimeType}\r\n\r\n`,
-    )
+    ),
+  ])
+  const tail = Buffer.from(`\r\n--${boundary}--\r\n`)
+  async function* parts() {
+    yield head
     yield* file.stream
-    yield Buffer.from(`\r\n--${boundary}--\r\n`)
+    yield tail
   }
-  return Readable.from(parts(), { objectMode: false })
+  return {
+    body: Readable.from(parts(), { objectMode: false }),
+    length: head.length + file.size + tail.length,
+  }
 }
 
 @Injectable()
@@ -155,30 +178,38 @@ export class WhisperClient {
     }
 
     let handle
+    let size
     try {
       handle = await open(path, 'r')
+      size = (await handle.stat()).size
     } catch (error) {
       clearTimeout(timer)
       signal.removeEventListener('abort', onAbort)
+      await handle?.close().catch(() => {})
       throw new TranscriptionError('Не удалось прочитать файл для транскрибации', { cause: error })
     }
-    const stream = handle.createReadStream()
+    // ровно `size` байт: файл, дописанный после stat, не разошёлся бы с `Content-Length`
+    const stream =
+      size > 0 ? handle.createReadStream({ start: 0, end: size - 1 }) : Readable.from([])
 
     try {
       const language = getWhisperLanguage()
       const boundary = `----video-meetings-${randomBytes(16).toString('hex')}`
-      const body = multipartBody(
+      const { body, length } = multipartBody(
         boundary,
         {
           model: WHISPER_MODEL,
           response_format: 'verbose_json',
           ...(language ? { language } : {}),
         },
-        { filename, mimeType, stream },
+        { filename, mimeType, size, stream },
       )
       const response = await fetch(new URL(TRANSCRIPTIONS_PATH, getWhisperUrl()), {
         method: 'POST',
-        headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+        headers: {
+          'content-type': `multipart/form-data; boundary=${boundary}`,
+          'content-length': String(length),
+        },
         body: body as unknown as BodyInit,
         // поток в теле запроса fetch Node принимает только в полудуплексе
         duplex: 'half',
@@ -189,7 +220,7 @@ export class WhisperClient {
         const text = await response.text().catch(() => '')
         throw new TranscriptionError(
           `Сервис транскрибации вернул ошибку (HTTP ${response.status})`,
-          { cause: text.slice(0, 1000) },
+          { cause: text.slice(0, 1000), retryable: isRetryableStatus(response.status) },
         )
       }
       let json: unknown
@@ -199,6 +230,7 @@ export class WhisperClient {
         if (controller.signal.aborted) throw error
         throw new TranscriptionError('Сервис транскрибации вернул некорректный ответ', {
           cause: error,
+          retryable: false,
         })
       }
       return normalizeWhisperResponse(json)

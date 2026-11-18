@@ -77,6 +77,37 @@ describe('WhisperClient', () => {
     expect(request.filename).toMatch(/\.mp3$/)
     expect(request.mimeType).toBe('audio/mpeg')
     expect(request.file?.equals(content)).toBe(true)
+    // длина известна заранее: тело не chunked, сервер видит размер до приёма файла
+    expect(request.headers['transfer-encoding']).toBeUndefined()
+    expect(Number(request.headers['content-length'])).toBeGreaterThan(content.length)
+  })
+
+  it('Content-Length совпадает с телом и у пустого файла', async () => {
+    const path = await audioFile(Buffer.alloc(0))
+    whisper.enqueue(transcriptReply(''))
+
+    await transcribe(path)
+
+    const [request] = whisper.requests
+    expect(request.file?.length).toBe(0)
+    expect(request.headers['content-length']).toBeDefined()
+  })
+
+  it('4xx — файл отклонён, повтор не поможет: retryable = false; 5xx, 408, 429 — retryable', async () => {
+    const path = await audioFile(Buffer.from('ID3 fake audio'))
+    const retryable = async (status: number) => {
+      whisper.enqueue(whisperErrorReply(status, 'no audio stream'))
+      const error = await transcribe(path).catch((caught: unknown) => caught)
+      expect(error).toBeInstanceOf(TranscriptionError)
+      return (error as TranscriptionError).retryable
+    }
+
+    expect(await retryable(400)).toBe(false)
+    expect(await retryable(415)).toBe(false)
+    expect(await retryable(500)).toBe(true)
+    expect(await retryable(503)).toBe(true)
+    expect(await retryable(408)).toBe(true)
+    expect(await retryable(429)).toBe(true)
   })
 
   it('передаёт язык из WHISPER_LANGUAGE, без него — автоопределение', async () => {
@@ -166,6 +197,12 @@ describe('normalizeWhisperResponse', () => {
     expect(normalizeWhisperResponse({ text: 'x', language: 'ru' }).language).toBe('ru')
     expect(normalizeWhisperResponse({ text: 'x', language: 'Russian' }).language).toBe('ru')
     expect(normalizeWhisperResponse({ text: 'x', language: 'klingon' }).language).toBeNull()
+  })
+
+  it('ответ без текста — TranscriptionError, повтор не поможет', () => {
+    expect(() => normalizeWhisperResponse({ language: 'ru' })).toThrow(
+      expect.objectContaining({ retryable: false }),
+    )
   })
 
   it('ответ без текста — TranscriptionError', () => {

@@ -102,11 +102,16 @@ export class MeetingTranscriber {
             `Транскрибация файла ${file.id} встречи ${meetingId} не удалась: ${error.message}` +
               (error.cause === undefined ? '' : ` (${inspect(error.cause)})`),
           )
+          // сервис отклонил сам файл (видео без звука, неподдерживаемый формат): повтор упал бы
+          // так же, поэтому файл без транскрипта уходит в `skippedFiles`, а саммари строится по
+          // остальным
+          if (!error.retryable) return null
           throw new TranscriptionError(
             `Не удалось транскрибировать ${file.name}: ${lowerFirst(error.message)}`,
             { cause: error },
           )
         })
+      if (transcript === null) continue
       // встречу удалили, пока Whisper работал: транскрипт уже некому показать
       signal.throwIfAborted()
       const data = {
