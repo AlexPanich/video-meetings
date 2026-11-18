@@ -25,8 +25,17 @@ const STATUS: Record<
 
 // столько сбоев опроса подряд (API или BFF недоступны) — и опрос останавливается
 const MAX_POLL_FAILURES = 5
+// после сбоя пауза удваивается, но не дольше этого
+const MAX_POLL_DELAY = 30_000
 
-const isActive = (summary: Summary | null) => summary !== null && STATUS[summary.status]?.active
+// статус, которого UI ещё не знает (API новее клиента), считаем идущей задачей: опрос продолжается
+const UNKNOWN_STATUS = { label: 'Обрабатывается', color: 'default', active: true } as const
+
+const statusInfo = (status: string) =>
+  (STATUS as Record<string, (typeof STATUS)[SummaryStatus] | undefined>)[status] ?? UNKNOWN_STATUS
+
+const isActive = (summary: Summary | null) =>
+  summary !== null && statusInfo(summary.status).active
 
 type State = { kind: 'loading' } | { kind: 'error' } | { kind: 'ready'; summary: Summary | null }
 
@@ -58,8 +67,10 @@ export function MeetingSummary({
     let timer: ReturnType<typeof setTimeout> | undefined
     let failures = 0
 
+    // после сбоев — экспоненциальная пауза, чтобы не долбить лежащий API
     const schedule = () => {
-      timer = setTimeout(load, pollInterval)
+      const delay = Math.min(pollInterval * 2 ** failures, MAX_POLL_DELAY)
+      timer = setTimeout(load, delay)
     }
 
     // в скрытой вкладке не опрашиваем: продолжим, когда её снова откроют
@@ -92,8 +103,11 @@ export function MeetingSummary({
           return
         }
         if (!hasData.current) setState({ kind: 'error' })
-        else if (++failures >= MAX_POLL_FAILURES) setPollStalled(true)
-        else schedule()
+        else if (failures + 1 >= MAX_POLL_FAILURES) setPollStalled(true)
+        else {
+          schedule()
+          failures++
+        }
       }
     }
 
@@ -145,18 +159,23 @@ export function MeetingSummary({
   const summary = state.kind === 'ready' ? state.summary : null
   const active = isActive(summary)
   const result = summary?.result ?? null
-  const status = summary ? STATUS[summary.status] : undefined
+  const status = summary ? statusInfo(summary.status) : undefined
+  // идёт пересоздание или оно упало — под статусом прежний результат
+  const previous = result !== null && (active || summary?.status === 'failed')
 
   return (
     <Card>
       <Card.Header className="flex flex-row flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <Card.Title>Саммари</Card.Title>
-          {status && (
-            <Chip color={status.color} size="sm">
-              {status.label}
-            </Chip>
-          )}
+          {/* live-регион: скринридер сообщит о смене статуса при опросе */}
+          <span role="status" aria-live="polite">
+            {status && (
+              <Chip color={status.color} size="sm">
+                {status.label}
+              </Chip>
+            )}
+          </span>
         </div>
         {/* при `failed` запуск заново — кнопка «Повторить» рядом с причиной */}
         {state.kind === 'ready' && summary?.status !== 'failed' && (
@@ -213,7 +232,13 @@ export function MeetingSummary({
             <Alert.Content>
               <Alert.Title>Не удалось сделать саммари</Alert.Title>
               {summary.error && <Alert.Description>{summary.error}</Alert.Description>}
-              <Button className="mt-2" size="sm" isDisabled={starting} onPress={start}>
+              <Button
+                className="mt-2"
+                size="sm"
+                isPending={starting}
+                isDisabled={starting}
+                onPress={start}
+              >
                 Повторить
               </Button>
             </Alert.Content>
@@ -226,6 +251,7 @@ export function MeetingSummary({
           </p>
         )}
 
+        {previous && <p className="text-sm text-muted">Показано предыдущее саммари</p>}
         {result && <SummarySections result={result} />}
       </Card.Content>
     </Card>

@@ -311,6 +311,42 @@ describe('MeetingSummary', () => {
 
     await screen.findByText('Генерация')
     expect(screen.getByRole('region', { name: 'Резюме' })).toHaveTextContent(result().summary)
+    expect(screen.getByText('Показано предыдущее саммари')).toBeInTheDocument()
+  })
+
+  it('упавшее пересоздание помечает показанное саммари как предыдущее', async () => {
+    api([{ body: summary({ status: 'failed', error: 'Ollama недоступна' }) }])
+    renderSummary()
+
+    await screen.findByText('Ollama недоступна')
+    expect(screen.getByText('Показано предыдущее саммари')).toBeInTheDocument()
+  })
+
+  it('у готового саммари нет пометки «предыдущее»', async () => {
+    api([{ body: summary() }])
+    renderSummary()
+
+    await screen.findByText('Готово')
+    expect(screen.queryByText('Показано предыдущее саммари')).not.toBeInTheDocument()
+  })
+
+  it('статус в live-регионе: скринридер услышит смену', async () => {
+    api([{ body: summary({ status: 'generating', result: null }) }, { body: summary() }])
+    renderSummary()
+
+    const live = await screen.findByText('Генерация')
+    const region = live.closest('[role="status"]')
+    expect(region).toHaveAttribute('aria-live', 'polite')
+    await waitFor(() => expect(region).toHaveTextContent('Готово'))
+  })
+
+  it('неизвестный статус считается активным: опрос идёт, запуск недоступен', async () => {
+    api([{ body: summary({ status: 'archiving', result: null }) }, { body: summary() }])
+    renderSummary()
+
+    expect(await screen.findByText('Обрабатывается')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Сделать саммари' })).toBeDisabled()
+    expect(await screen.findByText('Готово')).toBeInTheDocument()
   })
 
   it('пересоздание: «Пересоздать саммари» отправляет POST и запускает опрос', async () => {
