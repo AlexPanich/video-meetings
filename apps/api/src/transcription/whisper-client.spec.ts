@@ -63,7 +63,9 @@ describe('WhisperClient', () => {
       duration: 12.5,
       segments: [{ start: 0, end: 12.5, text: 'Обсудили релиз и сроки' }],
     })
-    // тело — поток, а не прочитанный в память файл (Buffer, строка, Blob из буфера)
+    // тело — поток, а не прочитанный в память файл (Buffer, строка, Blob из буфера). Контракт
+    // клиента: `fetch` с multipart, собранным потоком из `createReadStream` (так же отмена и
+    // таймаут обрывают и чтение с диска)
     expect(bodies).toHaveLength(1)
     expect(isStream(bodies[0])).toBe(true)
 
@@ -105,10 +107,8 @@ describe('WhisperClient', () => {
 
   it('недоступный Whisper — понятная ошибка без адреса сервера', async () => {
     const path = await audioFile(Buffer.from('ID3 fake audio'))
-    const { url } = whisper
-    await whisper.close()
-    whisper = await startWhisperMock()
-    // порт закрытого сервера: соединение отклоняется
+    // привилегированный порт 1 на loopback никто не слушает: соединение отклоняется
+    const url = 'http://127.0.0.1:1'
     vi.stubEnv('WHISPER_URL', url)
 
     const error = await transcribe(path).catch((caught: unknown) => caught)

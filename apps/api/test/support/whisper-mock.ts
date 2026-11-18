@@ -72,14 +72,24 @@ export const silentReply = (): WhisperHandler => () => new Promise<void>(() => {
 export function heldWhisperReply(then: WhisperHandler) {
   let release!: () => void
   let reached!: () => void
+  let dropped!: () => void
   const released = new Promise<void>((resolve) => (release = resolve))
   const called = new Promise<void>((resolve) => (reached = resolve))
+  /** Клиент оборвал соединение, не дождавшись ответа (отмена задачи). */
+  const aborted = new Promise<void>((resolve) => (dropped = resolve))
   const handler: WhisperHandler = async (request, res) => {
     reached()
-    await released
+    // клиент мог отменить запрос, пока ответ удерживается: отвечать уже некому
+    const closed = new Promise<boolean>((resolve) =>
+      res.on('close', () => {
+        if (!res.writableEnded) dropped()
+        resolve(true)
+      }),
+    )
+    if (await Promise.race([released.then(() => false), closed])) return
     await then(request, res)
   }
-  return { handler, release, called }
+  return { handler, release, called, aborted }
 }
 
 const parseMultipart = (req: IncomingMessage, request: WhisperRequest) =>
@@ -101,6 +111,10 @@ const parseMultipart = (req: IncomingMessage, request: WhisperRequest) =>
       resolve()
     })
     parser.on('error', reject)
+    // клиент оборвал загрузку (отмена, таймаут): `pipe` об этом парсеру не сообщает
+    req.on('close', () => {
+      if (!req.complete) reject(new Error('request aborted'))
+    })
     req.pipe(parser)
   })
 

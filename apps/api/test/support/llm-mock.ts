@@ -105,16 +105,24 @@ export const readAllFilesReply =
     const read = (fileId: string, offset: number) =>
       toolCallReply('mcp__meeting__read_file', { fileId, offset, limit })(body, signal)
 
-    if (!listed) return toolCallReply('mcp__meeting__list_files')(body, signal)
+    if (tools.length === 0) return toolCallReply('mcp__meeting__list_files')(body, signal)
     if (Array.isArray(last)) {
-      return listed.length > 0 ? read(listed[0].fileId, 0) : summaryReply(summary)(body, signal)
+      return last.length > 0
+        ? read((last as ListedFile[])[0].fileId, 0)
+        : summaryReply(summary)(body, signal)
     }
+    // продолжение файла — по последнему результату: старый ответ list_files SDK мог усечь
     const chunk = last as ReadChunkResult | undefined
     if (chunk && typeof chunk.fileId === 'string' && chunk.done === false) {
       return read(chunk.fileId, chunk.nextOffset)
     }
-    const index = listed.findIndex((file) => file.fileId === chunk?.fileId)
-    const next = index >= 0 ? listed[index + 1] : undefined
+    // конец файла или ошибка read_file: следующий файл после того, что запрашивался последним
+    const lastCall = body.messages
+      .flatMap((message) => message.tool_calls ?? [])
+      .filter((call) => call.function.name === 'mcp__meeting__read_file')
+      .at(-1)
+    const index = listed?.findIndex((file) => file.fileId === lastCall?.function.arguments.fileId)
+    const next = index !== undefined && index >= 0 ? listed?.[index + 1] : undefined
     return next ? read(next.fileId, 0) : summaryReply(summary)(body, signal)
   }
 

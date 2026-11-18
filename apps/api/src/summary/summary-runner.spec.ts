@@ -27,6 +27,9 @@ const writes = (prisma: PrismaMock) =>
 
 const lastWrite = (prisma: PrismaMock) => writes(prisma).at(-1)
 
+// транскрибатор встречи без аудио и видео: транскрибировать нечего, транскриптов нет
+const noTranscripts = () => ({ prepare: vi.fn().mockResolvedValue([]) })
+
 // агент, который ждёт отмены и тогда отвергает промис
 const abortableAgent = () => ({
   run: vi.fn(
@@ -46,9 +49,11 @@ describe('SummaryRunner', () => {
     const prisma = prismaMock()
     const agent = { run: vi.fn().mockResolvedValue(RESULT) }
 
-    await new SummaryRunner(prisma as never, agent as never).run('meeting-1')
+    await new SummaryRunner(prisma as never, agent as never, noTranscripts() as never).run(
+      'meeting-1',
+    )
 
-    expect(agent.run).toHaveBeenCalledWith('meeting-1', expect.any(AbortSignal))
+    expect(agent.run).toHaveBeenCalledWith('meeting-1', expect.any(AbortSignal), [])
     const statuses = writes(prisma).map((data) => data.status)
     expect(statuses).toEqual(['generating', 'done'])
     expect(lastWrite(prisma)).toMatchObject({ status: 'done', result: RESULT, error: null })
@@ -58,7 +63,9 @@ describe('SummaryRunner', () => {
     const prisma = prismaMock()
     const agent = { run: vi.fn().mockRejectedValue(new Error('Ollama is unreachable')) }
 
-    await new SummaryRunner(prisma as never, agent as never).run('meeting-1')
+    await new SummaryRunner(prisma as never, agent as never, noTranscripts() as never).run(
+      'meeting-1',
+    )
 
     const failed = lastWrite(prisma)
     expect(failed).toMatchObject({ status: 'failed' })
@@ -72,7 +79,9 @@ describe('SummaryRunner', () => {
     const prisma = prismaMock()
     const agent = abortableAgent()
 
-    await new SummaryRunner(prisma as never, agent as never).run('meeting-1')
+    await new SummaryRunner(prisma as never, agent as never, noTranscripts() as never).run(
+      'meeting-1',
+    )
 
     const signal = agent.run.mock.calls[0][1]
     expect(signal.aborted).toBe(true)
@@ -88,7 +97,9 @@ describe('SummaryRunner', () => {
     const agent = { run: vi.fn(() => new Promise(() => {})) }
 
     const started = Date.now()
-    await new SummaryRunner(prisma as never, agent as never).run('meeting-1')
+    await new SummaryRunner(prisma as never, agent as never, noTranscripts() as never).run(
+      'meeting-1',
+    )
 
     expect(Date.now() - started).toBeLessThan(2_000)
     expect(lastWrite(prisma)).toMatchObject({ status: 'failed' })
@@ -101,14 +112,14 @@ describe('SummaryRunner', () => {
     const agent = { run: vi.fn().mockResolvedValue(RESULT) }
 
     await expect(
-      new SummaryRunner(prisma as never, agent as never).run('meeting-1'),
+      new SummaryRunner(prisma as never, agent as never, noTranscripts() as never).run('meeting-1'),
     ).resolves.toBeUndefined()
   })
 
   it('отменяет текущие задачи при остановке приложения', async () => {
     const prisma = prismaMock()
     const agent = abortableAgent()
-    const runner = new SummaryRunner(prisma as never, agent as never)
+    const runner = new SummaryRunner(prisma as never, agent as never, noTranscripts() as never)
 
     const running = runner.run('meeting-1')
     await vi.waitFor(() => expect(agent.run).toHaveBeenCalled())
@@ -130,7 +141,7 @@ describe('SummaryRunner', () => {
           }),
       ),
     }
-    const runner = new SummaryRunner(prisma as never, agent as never)
+    const runner = new SummaryRunner(prisma as never, agent as never, noTranscripts() as never)
 
     const first = runner.run('meeting-1')
     const second = runner.run('meeting-2')
@@ -156,7 +167,7 @@ describe('SummaryRunner', () => {
     vi.stubEnv('SUMMARY_CONCURRENCY', '1')
     const prisma = prismaMock()
     const agent = abortableAgent()
-    const runner = new SummaryRunner(prisma as never, agent as never)
+    const runner = new SummaryRunner(prisma as never, agent as never, noTranscripts() as never)
 
     const first = runner.run('meeting-1')
     const queued = runner.run('meeting-2')
@@ -175,7 +186,7 @@ describe('SummaryRunner', () => {
     const prisma = prismaMock()
     vi.stubEnv('SUMMARY_CONCURRENCY', '2')
     const agent = abortableAgent()
-    const runner = new SummaryRunner(prisma as never, agent as never)
+    const runner = new SummaryRunner(prisma as never, agent as never, noTranscripts() as never)
 
     const deleted = runner.run('meeting-1')
     void runner.run('meeting-2')
@@ -271,6 +282,64 @@ describe('SummaryRunner: транскрибация', () => {
       where: { meetingId: 'meeting-1', status: 'transcribing' },
       data: { status: 'failed', error: message },
     })
+  })
+
+  // транскрибатор, который висит, пока его не отменят
+  const hangingTranscriber = () => ({
+    prepare: vi.fn<Prepare>(async (_meetingId, signal, onTranscribing) => {
+      await onTranscribing()
+      return new Promise<never>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+      })
+    }),
+  })
+
+  it('удаление встречи (cancel) во время транскрибации отменяет её', async () => {
+    const prisma = prismaMock()
+    const agent = { run: vi.fn().mockResolvedValue(RESULT) }
+    const transcriber = hangingTranscriber()
+    const runner = new SummaryRunner(prisma as never, agent as never, transcriber as never)
+
+    const running = runner.run('meeting-1')
+    await vi.waitFor(() => expect(transcriber.prepare).toHaveBeenCalled())
+    await runner.cancel('meeting-1')
+    await running
+
+    expect(transcriber.prepare.mock.calls[0][1].aborted).toBe(true)
+    expect(agent.run).not.toHaveBeenCalled()
+  })
+
+  it('SUMMARY_TIMEOUT_MS ограничивает и транскрибацию: зависший Whisper → failed', async () => {
+    vi.stubEnv('SUMMARY_TIMEOUT_MS', '50')
+    const prisma = prismaMock()
+    const agent = { run: vi.fn().mockResolvedValue(RESULT) }
+    const transcriber = hangingTranscriber()
+
+    await new SummaryRunner(prisma as never, agent as never, transcriber as never).run('meeting-1')
+
+    expect(transcriber.prepare.mock.calls[0][1].aborted).toBe(true)
+    expect(agent.run).not.toHaveBeenCalled()
+    const failed = lastWrite(prisma)
+    expect(failed).toMatchObject({ status: 'failed' })
+    expect(String(failed?.error)).toMatch(/врем|таймаут/i)
+  })
+
+  it('транскрибация занимает слот SUMMARY_CONCURRENCY: вторая задача ждёт в pending', async () => {
+    vi.stubEnv('SUMMARY_CONCURRENCY', '1')
+    const prisma = prismaMock()
+    const agent = { run: vi.fn().mockResolvedValue(RESULT) }
+    const transcriber = hangingTranscriber()
+    const runner = new SummaryRunner(prisma as never, agent as never, transcriber as never)
+
+    const first = runner.run('meeting-1')
+    const second = runner.run('meeting-2')
+    await vi.waitFor(() => expect(transcriber.prepare).toHaveBeenCalledTimes(1))
+    // пока Whisper занят первой встречей, вторая не начинается
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(transcriber.prepare).toHaveBeenCalledTimes(1)
+
+    await runner.onModuleDestroy()
+    await Promise.all([first, second])
   })
 
   it('остановка api во время транскрибации отменяет её и помечает задачу failed', async () => {

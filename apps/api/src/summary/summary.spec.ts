@@ -5,6 +5,9 @@ const prismaMock = () => ({
   meetingSummary: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
 })
 
+// встреча без аудио и видео: транскрибировать нечего
+const noTranscripts = { prepare: () => Promise.resolve([]) }
+
 const lastError = (prisma: ReturnType<typeof prismaMock>) =>
   (prisma.meetingSummary.updateMany.mock.calls.at(-1)?.[0] as { data: { error: string } }).data
     .error
@@ -39,7 +42,9 @@ describe('SummaryRunner: текст ошибки', () => {
         ),
     }
 
-    await new SummaryRunner(prisma as never, agent as never).run('meeting-1')
+    await new SummaryRunner(prisma as never, agent as never, noTranscripts as never).run(
+      'meeting-1',
+    )
 
     expect(lastError(prisma)).not.toContain('10.0.0.5')
     expect(lastError(prisma).length).toBeGreaterThan(0)
@@ -49,7 +54,9 @@ describe('SummaryRunner: текст ошибки', () => {
     const prisma = prismaMock()
     const agent = { run: vi.fn().mockRejectedValue(new SummaryError('Нет текстовых файлов')) }
 
-    await new SummaryRunner(prisma as never, agent as never).run('meeting-1')
+    await new SummaryRunner(prisma as never, agent as never, noTranscripts as never).run(
+      'meeting-1',
+    )
 
     expect(lastError(prisma)).toBe('Нет текстовых файлов')
   })

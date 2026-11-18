@@ -246,6 +246,21 @@ describe('Transcription for meeting summary (e2e)', { timeout: 20_000 }, () => {
     expect(await transcripts(audioId)).toBe(0)
   })
 
+  it('удаление встречи во время транскрибации обрывает запрос к Whisper, транскрипт не пишется', async () => {
+    const auth = await createUser()
+    const { meetingId, audioId } = await meetingWithAudio(auth)
+    const held = heldWhisperReply(transcriptReply(TRANSCRIPT))
+    whisper.enqueue(held.handler)
+
+    await start(auth, meetingId).expect(202)
+    await held.called
+    await http().delete(`/meetings/${meetingId}`).set('Authorization', auth).expect(204)
+
+    await held.aborted
+    held.release()
+    expect(await transcripts(audioId)).toBe(0)
+  })
+
   it('удаление файла удаляет его транскрипт', async () => {
     const auth = await createUser()
     const { meetingId, audioId } = await meetingWithAudio(auth)
