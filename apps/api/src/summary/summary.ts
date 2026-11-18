@@ -2,9 +2,10 @@ import { z } from 'zod'
 import type { MeetingSummary, SummaryStatus } from '../generated/prisma/client.js'
 
 // активна ли задача в этом статусе: второй запуск в это время — 409, при старте api такие задачи
-// закрываются как прерванные. Новый статус (`transcribing` в фазе 7) без решения не скомпилируется
+// закрываются как прерванные. Новый статус без решения не скомпилируется
 const SUMMARY_STATUS_ACTIVE = {
   pending: true,
+  transcribing: true,
   generating: true,
   done: false,
   failed: false,
