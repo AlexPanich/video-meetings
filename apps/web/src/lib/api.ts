@@ -26,7 +26,7 @@ export interface MeetingFile {
   createdAt: string
 }
 
-// `transcribing` появится в API с транскрибацией (фаза 7), UI показывает его заранее
+// `transcribing` — API транскрибирует аудио и видео встречи перед генерацией
 export type SummaryStatus = 'pending' | 'transcribing' | 'generating' | 'done' | 'failed'
 
 export interface SummaryActionItem {

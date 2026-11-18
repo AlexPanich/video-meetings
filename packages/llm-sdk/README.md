@@ -530,7 +530,7 @@ complete` — поток кончился без `done`, `Ollama failed: <error>
   OLLAMA_URL=http://<ip>:11434
   OLLAMA_MODEL=qwen3:14b
   OLLAMA_NUM_CTX=32768
-  # для транскрибации в api, SDK их не читает (появятся в .env.example вместе с ней)
+  # для транскрибации в api (apps/api/src/transcription), SDK их не читает
   WHISPER_URL=http://<ip>:8000
   WHISPER_LANGUAGE=ru
   ```
@@ -547,7 +547,8 @@ complete` — поток кончился без `done`, `Ollama failed: <error>
   схеме — `description`.
 - Ответ whisper.cpp отличается от OpenAI: `language` — полное имя (`"russian"`, а не `"ru"`),
   поле `model` запроса игнорируется, в сегментах лишние `tokens`/`words`. Клиент транскрибации
-  в api (появится вместе с ней) должен нормализовать ответ.
+  в api (`apps/api/src/transcription/whisper-client.ts`) нормализует ответ. Видео api отправляет
+  как есть, поэтому `--convert` (и `ffmpeg`) на сервере обязателен.
 - Qwen и Whisper вместе занимают ~15,0 из 16,3 ГБ VRAM: модель крупнее 14b или окно больше 32768
   рядом с Whisper не поместятся.
 - Сервисы стартуют только после входа пользователя в Windows. Пока их нет, SDK сразу бросает
