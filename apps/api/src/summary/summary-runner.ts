@@ -8,9 +8,10 @@ import { SummaryAgent } from './summary-agent.js'
 import { SummaryError, type SummaryResult } from './summary.js'
 
 // ограничение на задачу целиком (`SUMMARY_TIMEOUT_MS`), транскрибация включительно:
-// `OLLAMA_TIMEOUT_MS` и `WHISPER_TIMEOUT_MS` ограничивают только один запрос, а агентный цикл по
-// длинной встрече состоит из десятков запросов
-export const DEFAULT_SUMMARY_TIMEOUT_MS = 15 * 60 * 1000
+// `OLLAMA_TIMEOUT_MS` и `WHISPER_TIMEOUT_MS` ограничивают только один запрос, а саммари длинной
+// встречи — это транскрибация (до `WHISPER_TIMEOUT_MS` на файл) и map-reduce: запрос на каждую
+// часть материалов и на объединение выжимок
+export const DEFAULT_SUMMARY_TIMEOUT_MS = 30 * 60 * 1000
 // больше `setTimeout` не умеет: таймер сработал бы сразу
 const MAX_TIMER_MS = 2_147_483_647
 

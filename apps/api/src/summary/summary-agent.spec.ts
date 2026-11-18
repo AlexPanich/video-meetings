@@ -5,11 +5,13 @@ import { join } from 'node:path'
 import {
   installLlmMock,
   MOCK_OLLAMA_URL,
+  readAllFilesReply,
   SAMPLE_SUMMARY,
   summaryReply,
   toolCallReply,
   type LlmMock,
   type MockHandler,
+  type OllamaRequestBody,
 } from '../../test/support/llm-mock.js'
 import { readChunk, SummaryAgent } from './summary-agent.js'
 
@@ -289,52 +291,177 @@ describe('SummaryAgent', () => {
       expect(result.skippedFiles).toEqual([{ id: video.id, name: 'call.mp4' }])
     })
 
-    it('транскрипт больше num_ctx суммируется многократными read_file', async () => {
-      vi.stubEnv('OLLAMA_NUM_CTX', '8192')
-      const meetingId = randomUUID()
-      const audio = await store(meetingId, 'long-call.mp3', 'ID3', 'audio/mpeg')
-      // ~80 КБ кириллицы с метками: каждая метка должна дойти до модели в какой-то части
+    describe('материалы больше num_ctx: map-reduce', () => {
+      // ~160 КБ кириллицы с метками: каждая метка должна дойти до модели в какой-то части
       const markers = Array.from({ length: 40 }, (_, index) => `МЕТКА-${index + 1000}`)
-      const text = markers
+      const longText = markers
         .map(
           (marker) =>
-            `${marker}. ${'Обсуждаем план релиза и сроки по задачам команды. '.repeat(20)}`,
+            `${marker}. ${'Обсуждаем план релиза и сроки по задачам команды. '.repeat(40)}`,
         )
         .join('\n')
-      // заведомо больше окна: 8192 токена × ~3 символа
-      expect(text.length).toBeGreaterThan(8192 * 3)
-      const model = readingModel(4_000)
-      llm.setFallback(model.handler)
+      const FIRST_DECISION = 'Решение из начала встречи: перенести релиз на март'
 
-      const result = await new SummaryAgent(prismaWith([audio]) as never).run(
+      const userText = (body: OllamaRequestBody) =>
+        body.messages
+          .filter((message) => message.role === 'user')
+          .map((message) => message.content)
+          .join('\n')
+
+      // модель: выжимка части с первой меткой содержит решение из начала встречи, объединение
+      // выжимок переносит его дальше; `padding` раздувает выжимки
+      const notesModel =
+        (padding = ''): MockHandler =>
+        (body) => {
+          const input = userText(body)
+          const early = input.includes(markers[0]) || input.includes(FIRST_DECISION)
+          return summaryReply({
+            ...SAMPLE_SUMMARY,
+            summary: `${SAMPLE_SUMMARY.summary}${padding}`,
+            decisions: early ? [FIRST_DECISION] : ['Решение из середины'],
+          })(body)
+        }
+
+      beforeEach(() => vi.stubEnv('OLLAMA_NUM_CTX', '8192'))
+
+      it('транскрипт в несколько раз длиннее num_ctx: выжимки частей, затем итог по ним', async () => {
+        const meetingId = randomUUID()
+        const audio = await store(meetingId, 'long-call.mp3', 'ID3', 'audio/mpeg')
+        // заведомо больше окна в несколько раз: 8192 токена × ~3 символа
+        expect(longText.length).toBeGreaterThan(8192 * 3 * 3)
+        llm.setFallback(notesModel())
+
+        const result = await new SummaryAgent(prismaWith([audio]) as never).run(
+          meetingId,
+          new AbortController().signal,
+          [{ fileId: audio.id, name: audio.name, text: longText }],
+        )
+
+        expect(result.decisions).toEqual([FIRST_DECISION])
+        expect(result.skippedFiles).toEqual([])
+        // несколько частей и итоговый запрос; инструменты не нужны — текст части в запросе
+        expect(llm.requests.length).toBeGreaterThan(3)
+        for (const body of llm.requests) expect(body.tools ?? []).toEqual([])
+        // каждая метка дошла до модели в выжимке какой-то части
+        const parts = llm.requests.slice(0, -1).map(userText)
+        for (const marker of markers) {
+          expect(parts.filter((part) => part.includes(marker))).toHaveLength(1)
+        }
+        // итоговый запрос — по выжимкам, а не по тексту: решение из первой части в нём есть
+        const final = userText(llm.requests.at(-1)!)
+        expect(final).toContain(FIRST_DECISION)
+        expect(final).not.toContain(markers[0])
+        // ни один запрос не отправлен сверх окна: каждый — одна часть, а не весь транскрипт
+        for (const body of llm.requests) {
+          expect(JSON.stringify(body.messages).length).toBeLessThan(8192 * 3)
+        }
+        // часть режется по границе строки, а не посреди слова
+        // в запросе части может быть несколько блоков <material> — по порядку
+        const contents = parts.flatMap((part) =>
+          [...part.matchAll(/<material[^>]*>\n([\s\S]*?)\n<\/material>/g)].map((match) => match[1]),
+        )
+        for (const content of contents.slice(0, -1)) expect(content).toMatch(/\n$/)
+        expect(contents.join('')).toBe(longText)
+      })
+
+      it('выжимки не помещаются в один запрос — объединяются по уровням, решение из начала сохраняется', async () => {
+        const meetingId = randomUUID()
+        const notes = await store(meetingId, 'notes.txt', longText)
+        // раздутые выжимки: все вместе больше окна
+        llm.setFallback(notesModel(' Подробности.'.repeat(100)))
+
+        const result = await new SummaryAgent(prismaWith([notes]) as never).run(
+          meetingId,
+          new AbortController().signal,
+        )
+
+        expect(result.decisions).toEqual([FIRST_DECISION])
+        // части, промежуточные объединения и итог
+        const chunks = llm.requests.filter((body) => userText(body).includes('<material'))
+        expect(llm.requests.length).toBeGreaterThan(chunks.length + 1)
+        for (const body of llm.requests) {
+          expect(JSON.stringify(body.messages).length).toBeLessThan(8192 * 3)
+        }
+      })
+
+      it('несколько файлов: мелкие файлы — в одном запросе, длинный — своими частями', async () => {
+        const meetingId = randomUUID()
+        const agenda = await store(meetingId, 'agenda.md', '# Повестка\n- МЕТКА-АГЕНДА')
+        const notes = await store(meetingId, 'notes.txt', 'МЕТКА-ЗАМЕТКИ')
+        const audio = await store(meetingId, 'call.mp3', 'ID3', 'audio/mpeg')
+        llm.setFallback(notesModel())
+
+        await new SummaryAgent(prismaWith([agenda, notes, audio]) as never).run(
+          meetingId,
+          new AbortController().signal,
+          [{ fileId: audio.id, name: audio.name, text: longText }],
+        )
+
+        const parts = llm.requests.slice(0, -1).map(userText)
+        const small = parts.filter((part) => part.includes('МЕТКА-АГЕНДА'))
+        expect(small).toHaveLength(1)
+        expect(small[0]).toContain('МЕТКА-ЗАМЕТКИ')
+        expect(small[0]).toContain('file="agenda.md"')
+        expect(small[0]).toContain('file="notes.txt"')
+        // запрос на каждую часть длинного транскрипта, отмеченную как транскрипт
+        const transcriptParts = parts.filter((part) =>
+          part.includes('file="call.mp3" transcript="true"'),
+        )
+        expect(transcriptParts.length).toBeGreaterThan(3)
+      })
+
+      it('одна выжимка (остальные файлы пустые) — итог без запроса на объединение', async () => {
+        const meetingId = randomUUID()
+        const blank = await store(meetingId, 'blank.txt', ' \n'.repeat(20_000))
+        const notes = await store(meetingId, 'notes.txt', 'Короткие заметки: МЕТКА-1000')
+        llm.setFallback(notesModel())
+
+        const result = await new SummaryAgent(prismaWith([blank, notes]) as never).run(
+          meetingId,
+          new AbortController().signal,
+        )
+
+        expect(llm.requests).toHaveLength(1)
+        expect(result.decisions).toEqual([FIRST_DECISION])
+      })
+
+      it('отмена между частями: следующие части не отправляются', async () => {
+        const meetingId = randomUUID()
+        const audio = await store(meetingId, 'long-call.mp3', 'ID3', 'audio/mpeg')
+        const controller = new AbortController()
+        llm.setFallback((body) => {
+          controller.abort()
+          return notesModel()(body)
+        })
+
+        await expect(
+          new SummaryAgent(prismaWith([audio]) as never).run(meetingId, controller.signal, [
+            { fileId: audio.id, name: audio.name, text: longText },
+          ]),
+        ).rejects.toThrow()
+        expect(llm.requests).toHaveLength(1)
+      })
+    })
+
+    it('материалы, которые помещаются в контекст, — один проход агента без лишних запросов', async () => {
+      const meetingId = randomUUID()
+      const notes = await store(meetingId, 'notes.txt', 'Короткие заметки встречи.')
+      const audio = await store(meetingId, 'call.mp3', 'ID3', 'audio/mpeg')
+      llm.setFallback(readAllFilesReply())
+
+      await new SummaryAgent(prismaWith([notes, audio]) as never).run(
         meetingId,
         new AbortController().signal,
-        [{ fileId: audio.id, name: audio.name, text }],
+        [{ fileId: audio.id, name: audio.name, text: 'Короткий транскрипт.' }],
       )
 
-      expect(result.summary).toBe(SAMPLE_SUMMARY.summary)
-      // транскрипт прочитан частями, каждая — следующий кусок, а не повтор первого
-      expect(model.reads.length).toBeGreaterThan(5)
-      const offsets = model.reads.map(({ offset }) => offset)
-      expect(offsets).toEqual([...offsets].sort((a, b) => a - b))
-      expect(new Set(offsets).size).toBe(offsets.length)
-      // в сообщениях к модели видны многократные вызовы read_file
-      // (старые обмены SDK может схлопнуть, поэтому вызовы собираются по всем запросам)
-      const readOffsets = new Set(
-        llm.requests.flatMap((body) =>
-          body.messages
-            .flatMap((message) => message.tool_calls ?? [])
-            .filter((call) => call.function.name === READ_FILE)
-            .map((call) => call.function.arguments.offset),
-        ),
-      )
-      expect(readOffsets.size).toBeGreaterThan(1)
-      // до модели дошёл весь транскрипт
-      const seen = JSON.stringify(llm.requests)
-      for (const marker of markers) expect(seen).toContain(marker)
-      // ни один запрос не отправлен сверх окна: каждый — одна часть, а не весь транскрипт
+      // list_files, два read_file, ответ — и все запросы с инструментами встречи
+      expect(llm.requests).toHaveLength(4)
       for (const body of llm.requests) {
-        expect(JSON.stringify(body.messages).length).toBeLessThan(text.length)
+        expect((body.tools ?? []).map((tool) => tool.function.name).sort()).toEqual([
+          LIST_FILES,
+          READ_FILE,
+        ])
       }
     })
 
@@ -472,6 +599,20 @@ describe('readChunk', () => {
     const chunk = await readChunk(path, 1, 1024)
 
     expect(chunk).toMatchObject({ offset: 2, nextOffset: 4, done: true, content: 'я' })
+  })
+
+  it('не UTF-8: длинная цепочка байт продолжения не останавливает чтение', async () => {
+    const bytes = Buffer.concat([Buffer.from('a'), Buffer.alloc(5000, 0x80)])
+    await writeFile(path, bytes)
+
+    let offset = 0
+    for (let step = 0; step < 100; step++) {
+      const chunk = await readChunk(path, offset, 1024, true)
+      if (chunk.done) return
+      expect(chunk.nextOffset).toBeGreaterThan(offset)
+      offset = chunk.nextOffset
+    }
+    throw new Error('чтение не продвигается')
   })
 
   it('offset за концом файла и пустой файл — пустая часть с done', async () => {
