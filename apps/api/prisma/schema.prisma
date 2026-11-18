@@ -53,15 +53,38 @@ model MeetingFile {
   size        Int        @default(0)
   mimeType    String
   status      FileStatus @default(uploading)
+  transcript  MeetingTranscript?
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
   @@index([meetingId])
 }
 
-// этапы фоновой задачи саммари; `transcribing` появится вместе с транскрибацией (фаза 7)
+// транскрипт аудио- или видеофайла встречи (Whisper): один на файл, удаляется вместе с файлом
+// (и со встречей). `storageName` и `fileSize` — признак изменения файла: транскрипт годен, пока
+// они совпадают с файлом, иначе файл транскрибируется заново
+model MeetingTranscript {
+  id          String      @id @default(uuid())
+  fileId      String      @unique
+  file        MeetingFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  storageName String
+  fileSize    Int
+  text        String
+  // код ISO 639-1, если Whisper его вернул
+  language    String?
+  // длительность записи в секундах
+  duration    Float?
+  // сегменты `{ start, end, text }` — для будущей разметки по времени
+  segments    Json
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+}
+
+// этапы фоновой задачи саммари: очередь → транскрибация аудио и видео (если есть что
+// транскрибировать) → генерация → итог
 enum SummaryStatus {
   pending
+  transcribing
   generating
   done
   failed

@@ -26,7 +26,10 @@ export class SummaryResultDto {
   actionItems: ActionItemDto[]
   /** Открытые вопросы */
   openQuestions: string[]
-  /** Файлы встречи, которые не учтены (не `.txt`, `.md`, `.vtt`, `.srt`) */
+  /**
+   * Файлы встречи, которые не учтены: не текст (`.txt`, `.md`, `.vtt`, `.srt`) и не аудио/видео
+   * с транскриптом (в том числе записи без речи), а также не загруженные до конца
+   */
   skippedFiles: SkippedFileDto[]
 }
 
@@ -34,7 +37,9 @@ export class SummaryDto {
   meetingId: string
   @ApiProperty({
     enum: SUMMARY_STATUSES,
-    description: '`pending` → `generating` → `done` | `failed`',
+    description:
+      '`pending` → `transcribing` (только если есть аудио или видео без транскрипта) → ' +
+      '`generating` → `done` | `failed`',
   })
   status: SummaryStatus
   /** Последнее успешное саммари; при пересоздании остаётся прежним до успеха */

@@ -1,14 +1,14 @@
 import { StaleSummariesCleaner } from './stale-summaries.cleaner.js'
 
 describe('StaleSummariesCleaner', () => {
-  it('при старте api помечает задачи в pending/generating как failed', async () => {
+  it('при старте api помечает задачи в pending/transcribing/generating как failed', async () => {
     const prisma = { meetingSummary: { updateMany: vi.fn().mockResolvedValue({ count: 2 }) } }
 
     await new StaleSummariesCleaner(prisma as never).onApplicationBootstrap()
 
     expect(prisma.meetingSummary.updateMany).toHaveBeenCalledTimes(1)
     expect(prisma.meetingSummary.updateMany).toHaveBeenCalledWith({
-      where: { status: { in: ['pending', 'generating'] } },
+      where: { status: { in: ['pending', 'transcribing', 'generating'] } },
       data: expect.objectContaining({ status: 'failed', error: expect.any(String) as string }) as {
         status: string
       },

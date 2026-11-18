@@ -2,12 +2,16 @@ import { inspect } from 'node:util'
 import { Injectable, Logger, type OnModuleDestroy } from '@nestjs/common'
 import type { Prisma } from '../generated/prisma/client.js'
 import { PrismaService } from '../prisma/prisma.service.js'
+import { MeetingTranscriber } from '../transcription/meeting-transcriber.js'
+import { TranscriptionError } from '../transcription/whisper-client.js'
 import { SummaryAgent } from './summary-agent.js'
-import { SummaryError } from './summary.js'
+import { SummaryError, type SummaryResult } from './summary.js'
 
-// ограничение на задачу целиком (`SUMMARY_TIMEOUT_MS`): `OLLAMA_TIMEOUT_MS` ограничивает только
-// один запрос, а агентный цикл по длинной встрече состоит из десятков запросов
-export const DEFAULT_SUMMARY_TIMEOUT_MS = 15 * 60 * 1000
+// ограничение на задачу целиком (`SUMMARY_TIMEOUT_MS`), транскрибация включительно:
+// `OLLAMA_TIMEOUT_MS` и `WHISPER_TIMEOUT_MS` ограничивают только один запрос, а саммари длинной
+// встречи — это транскрибация (до `WHISPER_TIMEOUT_MS` на файл) и map-reduce: запрос на каждую
+// часть материалов и на объединение выжимок
+export const DEFAULT_SUMMARY_TIMEOUT_MS = 30 * 60 * 1000
 // больше `setTimeout` не умеет: таймер сработал бы сразу
 const MAX_TIMER_MS = 2_147_483_647
 
@@ -28,11 +32,20 @@ export const getSummaryConcurrency = () => {
   return Number.isInteger(value) && value > 0 ? value : DEFAULT_SUMMARY_CONCURRENCY
 }
 
-// текст ошибок SDK и транспорта (адрес Ollama, ответ модели) владельцу не показываем, только в лог
+// текст ошибок SDK и транспорта (адрес Ollama, ответ модели) владельцу не показываем, только в лог;
+// `SummaryError` и `TranscriptionError` составлены для владельца
 const GENERIC_ERROR = 'Не удалось составить саммари: модель недоступна или вернула ошибку'
 
 const userMessage = (error: unknown) =>
-  error instanceof SummaryError && error.message ? error.message : GENERIC_ERROR
+  (error instanceof SummaryError || error instanceof TranscriptionError) && error.message
+    ? error.message
+    : GENERIC_ERROR
+
+// активные этапы задачи: итог пишется только поверх своего текущего статуса
+type ActiveStatus = 'pending' | 'transcribing' | 'generating'
+
+// задачу удалили вместе со встречей или закрыли при старте другого процесса api
+class TaskGoneError extends Error {}
 
 const logMessage = (error: unknown) => {
   if (!(error instanceof Error)) return String(error)
@@ -45,8 +58,10 @@ interface RunningTask {
 }
 
 /**
- * Фоновая задача саммари в процессе api: `pending` (в очереди) → `generating` → `done` | `failed`.
- * Одновременно генерируется не больше `SUMMARY_CONCURRENCY` задач, остальные ждут в `pending`.
+ * Фоновая задача саммари в процессе api: `pending` (в очереди) → `transcribing` (если у встречи
+ * есть аудио или видео без транскрипта) → `generating` → `done` | `failed`. Одновременно
+ * выполняется не больше `SUMMARY_CONCURRENCY` задач (транскрибация тоже занимает место: Whisper
+ * и Ollama делят один GPU), остальные ждут в `pending`.
  */
 @Injectable()
 export class SummaryRunner implements OnModuleDestroy {
@@ -58,6 +73,7 @@ export class SummaryRunner implements OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly agent: SummaryAgent,
+    private readonly transcriber: MeetingTranscriber,
   ) {}
 
   /** Выполняет задачу до конца; не бросает исключений — итог записывается в БД. */
@@ -132,44 +148,59 @@ export class SummaryRunner implements OnModuleDestroy {
   }
 
   private async generate(meetingId: string, controller: AbortController): Promise<void> {
-    try {
-      // задачу могли удалить вместе со встречей или закрыть при старте другого процесса api
-      const { count } = await this.prisma.meetingSummary.updateMany({
-        where: { meetingId, status: 'pending' },
-        data: { status: 'generating' },
-      })
-      if (count === 0) return
-    } catch (error) {
-      this.logger.error(`Не удалось начать саммари встречи ${meetingId}: ${String(error)}`)
-      return
+    const { signal } = controller
+    let status: ActiveStatus = 'pending'
+    // идущий переход: таймаут может сработать, пока он в БД, — итог пишется после него
+    let transition: Promise<unknown> = Promise.resolve()
+    // переход только из текущего статуса задачи
+    const advance = (to: ActiveStatus) => {
+      signal.throwIfAborted()
+      // сбой БД здесь — обычная ошибка: задача пытается записать `failed`, а не остаётся активной
+      const step = (async () => {
+        const { count } = await this.prisma.meetingSummary.updateMany({
+          where: { meetingId, status },
+          data: { status: to },
+        })
+        if (count === 0) throw new TaskGoneError()
+        status = to
+      })()
+      transition = step.catch(() => {})
+      return step
     }
 
     try {
-      const result = await this.withTimeout(meetingId, controller)
+      const result = await this.withTimeout(controller, async () => {
+        const transcripts = await this.transcriber.prepare(meetingId, signal, () =>
+          advance('transcribing'),
+        )
+        await advance('generating')
+        return this.agent.run(meetingId, signal, transcripts)
+      })
       // JSON-совместим по построению (разобран zod-схемой), но интерфейс без индексной сигнатуры
       const json = result as unknown as Prisma.InputJsonObject
       await this.finish(meetingId, 'generating', { status: 'done', result: json, error: null })
     } catch (error) {
-      await this.fail(
-        meetingId,
-        'generating',
-        controller.signal.aborted ? controller.signal.reason : error,
-      )
+      if (error instanceof TaskGoneError) return
+      await transition
+      await this.fail(meetingId, status, signal.aborted ? signal.reason : error)
     }
   }
 
-  private async fail(meetingId: string, from: 'pending' | 'generating', reason: unknown) {
+  private async fail(meetingId: string, from: ActiveStatus, reason: unknown) {
     this.logger.warn(`Саммари встречи ${meetingId} не удалось: ${logMessage(reason)}`)
     // прежний результат не трогаем: пересоздание заменяет его только после успеха
     await this.finish(meetingId, from, { status: 'failed', error: userMessage(reason) })
   }
 
-  // агент получает сигнал отмены, но задача не ждёт агента, который на него не реагирует
-  private async withTimeout(meetingId: string, controller: AbortController) {
+  // транскрибатор и агент получают сигнал отмены, но задача не ждёт тех, кто на него не реагирует
+  private async withTimeout(
+    controller: AbortController,
+    work: () => Promise<SummaryResult>,
+  ): Promise<SummaryResult> {
     const timeoutMs = getSummaryTimeoutMs()
     const timer = setTimeout(
       () =>
-        controller.abort(new SummaryError(`Превышено время генерации саммари (${timeoutMs} мс)`)),
+        controller.abort(new SummaryError(`Превышено время подготовки саммари (${timeoutMs} мс)`)),
       timeoutMs,
     )
     let onAbort = () => {}
@@ -178,7 +209,7 @@ export class SummaryRunner implements OnModuleDestroy {
       controller.signal.addEventListener('abort', onAbort, { once: true })
     })
     try {
-      return await Promise.race([this.agent.run(meetingId, controller.signal), aborted])
+      return await Promise.race([work(), aborted])
     } finally {
       clearTimeout(timer)
       controller.signal.removeEventListener('abort', onAbort)
@@ -187,7 +218,7 @@ export class SummaryRunner implements OnModuleDestroy {
 
   private async finish(
     meetingId: string,
-    from: 'pending' | 'generating',
+    from: ActiveStatus,
     data: { status: 'done' | 'failed'; result?: Prisma.InputJsonObject; error: string | null },
   ) {
     try {
