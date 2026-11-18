@@ -6,6 +6,9 @@ vi.mock('@/lib/server/meetings', () => ({ getMeeting: (id: string) => getMeeting
 vi.mock('./meeting-files', () => ({
   MeetingFiles: ({ meetingId }: { meetingId: string }) => <p>files:{meetingId}</p>,
 }))
+vi.mock('./meeting-summary', () => ({
+  MeetingSummary: ({ meetingId }: { meetingId: string }) => <p>summary:{meetingId}</p>,
+}))
 const redirect = vi.fn((url: string) => {
   throw new Error(`REDIRECT:${url}`)
 })
@@ -33,13 +36,14 @@ beforeEach(() => {
 })
 
 describe('MeetingDetails', () => {
-  it('показывает встречу и блок файлов этой встречи', async () => {
+  it('показывает встречу, блок файлов и блок саммари этой встречи', async () => {
     getMeeting.mockResolvedValue({ ok: true, data: meeting })
     await render_()
 
     expect(screen.getByRole('heading', { level: 1, name: 'Планёрка' })).toBeInTheDocument()
     expect(screen.getByText(/2 участн\./)).toBeInTheDocument()
     expect(screen.getByText('files:m1')).toBeInTheDocument()
+    expect(screen.getByText('summary:m1')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Все встречи/ })).toHaveAttribute('href', '/')
   })
 
@@ -60,6 +64,7 @@ describe('MeetingDetails', () => {
     await render_()
 
     expect(screen.getByRole('alert')).toHaveTextContent('Не удалось загрузить встречу')
+    expect(screen.queryByText(/^summary:/)).not.toBeInTheDocument()
     expect(notFound).not.toHaveBeenCalled()
     expect(redirect).not.toHaveBeenCalled()
   })

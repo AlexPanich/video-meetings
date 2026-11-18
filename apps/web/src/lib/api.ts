@@ -26,6 +26,33 @@ export interface MeetingFile {
   createdAt: string
 }
 
+// `transcribing` появится в API с транскрибацией (фаза 7), UI показывает его заранее
+export type SummaryStatus = 'pending' | 'transcribing' | 'generating' | 'done' | 'failed'
+
+export interface SummaryActionItem {
+  task: string
+  assignee?: string
+  dueDate?: string
+}
+
+export interface SummaryResult {
+  summary: string
+  decisions: string[]
+  actionItems: SummaryActionItem[]
+  openQuestions: string[]
+  skippedFiles: { id: string; name: string }[]
+}
+
+export interface MeetingSummary {
+  meetingId: string
+  status: SummaryStatus
+  // последнее успешное саммари: при пересоздании остаётся прежним до успеха
+  result: SummaryResult | null
+  error: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 export interface AuthResult {
   user: User
 }
@@ -113,3 +140,19 @@ export const fileDownloadUrl = (meetingId: string, fileId: string) =>
 
 export const deleteMeetingFile = (meetingId: string, fileId: string) =>
   request<void>(filePath(meetingId, fileId), { method: 'DELETE' })
+
+const summaryPath = (meetingId: string) => `/meetings/${encodeURIComponent(meetingId)}/summary`
+
+// Саммари ещё не запускали (404) — `null`: это обычное состояние, а не ошибка
+export const getMeetingSummary = async (meetingId: string): Promise<MeetingSummary | null> => {
+  try {
+    return await request<MeetingSummary>(summaryPath(meetingId), { cache: 'no-store' })
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null
+    throw error
+  }
+}
+
+// Запуск или пересоздание; активная задача — ApiError 409
+export const startMeetingSummary = (meetingId: string) =>
+  request<MeetingSummary>(summaryPath(meetingId), { method: 'POST' })
