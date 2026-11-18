@@ -13,7 +13,9 @@ import {
   type MockHandler,
   type OllamaRequestBody,
 } from '../../test/support/llm-mock.js'
-import { readChunk, SummaryAgent } from './summary-agent.js'
+import { MAX_MAP_PARTS, readChunk, SummaryAgent } from './summary-agent.js'
+import { materialBudgetBytes } from './summary-budget.js'
+import { SummaryError } from './summary.js'
 
 // инструменты SDK-сервера `meeting` видны модели под полными именами
 const LIST_FILES = 'mcp__meeting__list_files'
@@ -408,6 +410,43 @@ describe('SummaryAgent', () => {
           part.includes('file="call.mp3" transcript="true"'),
         )
         expect(transcriptParts.length).toBeGreaterThan(3)
+      })
+
+      it('материалы чуть меньше бюджета — уже map-reduce: один проход оставлен с запасом', async () => {
+        const meetingId = randomUUID()
+        // 90 % бюджета: оценка токенов грубая, на границе SDK усёк бы старые read_file
+        const text = 'Обсудили сроки релиза.\n'.repeat(
+          Math.floor((materialBudgetBytes(8192) * 0.9) / Buffer.byteLength('Обсудили сроки релиза.\n')),
+        )
+        const notes = await store(meetingId, 'notes.txt', text)
+        llm.setFallback(notesModel())
+
+        await new SummaryAgent(prismaWith([notes]) as never).run(
+          meetingId,
+          new AbortController().signal,
+        )
+
+        expect(llm.requests.length).toBeGreaterThan(0)
+        for (const body of llm.requests) expect(body.tools ?? []).toEqual([])
+      })
+
+      it(`больше ${MAX_MAP_PARTS} частей — SummaryError сразу, без запросов к модели`, async () => {
+        const meetingId = randomUUID()
+        const audio = await store(meetingId, 'dump.mp3', 'ID3', 'audio/mpeg')
+        const huge = 'строка лога\n'.repeat(
+          Math.ceil(((MAX_MAP_PARTS + 1) * materialBudgetBytes(8192)) / Buffer.byteLength('строка лога\n')),
+        )
+        llm.setFallback(notesModel())
+
+        const error = await new SummaryAgent(prismaWith([audio]) as never)
+          .run(meetingId, new AbortController().signal, [
+            { fileId: audio.id, name: audio.name, text: huge },
+          ])
+          .catch((caught: unknown) => caught)
+
+        expect(error).toBeInstanceOf(SummaryError)
+        expect((error as Error).message).toMatch(/слишком длинные.*лимите 200/)
+        expect(llm.requests).toHaveLength(0)
       })
 
       it('одна выжимка (остальные файлы пустые) — итог без запроса на объединение', async () => {

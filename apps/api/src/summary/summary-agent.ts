@@ -45,6 +45,14 @@ const STRUCTURED_MAX_TURNS = 4
 const MAX_MERGE_LEVELS = 6
 // заголовок блока <material> (имя файла до 255 символов UTF-8 в JSON) и начало запроса части
 const MATERIAL_HEADER_RESERVE_BYTES = 2048
+// один проход — только с запасом от бюджета: оценка 3 символа на токен грубая, а локальный SDK
+// уточняет её по ответам Ollama; на границе он усёк бы старые `read_file`, и начало встречи
+// потерялось бы — ровно то, от чего спасает map-reduce
+const SINGLE_PASS_SHARE = 0.8
+// частей map-reduce на задачу: каждая — отдельный запрос к модели, а задача всё это время держит
+// GPU и слот `SUMMARY_CONCURRENCY`. 200 частей ≈ 12 МБ текста при 32768 токенах — с запасом на
+// многочасовую встречу; больше — выгрузка, а не материалы встречи, и задача падает сразу
+export const MAX_MAP_PARTS = 200
 
 export const isSummarySource = (name: string) =>
   SUMMARY_SOURCE_EXTENSIONS.has(extname(name).toLowerCase())
@@ -244,6 +252,10 @@ async function structuredQuery(
   throw new SummaryError('Модель не вернула саммари')
 }
 
+// часть текста меньше бюджета на заголовок блока <material> и начало запроса
+const chunkLimitBytes = (budget: number) =>
+  Math.max(MIN_CHUNK_BYTES, budget - MATERIAL_HEADER_RESERVE_BYTES)
+
 @Injectable()
 export class SummaryAgent {
   constructor(private readonly prisma: PrismaService) {}
@@ -294,10 +306,20 @@ export class SummaryAgent {
       // за один проход; длиннее — map-reduce, иначе SDK усёк бы начало встречи до ответа
       const budget = materialBudgetBytes()
       const total = sources.reduce((sum, source) => sum + sourceSize(source), 0)
-      const output =
-        total <= budget
-          ? await this.agent(meetingId, sources, budget, abortController)
-          : await this.mapReduce(meetingId, sources, budget, abortController)
+      if (total <= budget * SINGLE_PASS_SHARE) {
+        return { ...(await this.agent(meetingId, sources, budget, abortController)), skippedFiles }
+      }
+      // число частей известно до первого запроса: слишком длинные материалы отклоняются сразу,
+      // а не по таймауту задачи. Часть кончается переводом строки во второй половине лимита,
+      // поэтому частей может быть до двух раз больше оценки — лимит считается по ней
+      const parts = Math.ceil(total / chunkLimitBytes(budget))
+      if (parts > MAX_MAP_PARTS) {
+        throw new SummaryError(
+          `Материалы встречи слишком длинные для саммари: около ${parts} частей ` +
+            `при лимите ${MAX_MAP_PARTS}`,
+        )
+      }
+      const output = await this.mapReduce(meetingId, sources, budget, abortController)
       return { ...output, skippedFiles }
     } finally {
       signal.removeEventListener('abort', abort)
@@ -353,7 +375,7 @@ export class SummaryAgent {
     }
     // часть текста меньше бюджета на заголовок блока <material> (имя файла до 255 символов) и
     // начало запроса, иначе одиночная часть превышала бы бюджет
-    const chunkLimit = Math.max(MIN_CHUNK_BYTES, budget - MATERIAL_HEADER_RESERVE_BYTES)
+    const chunkLimit = chunkLimitBytes(budget)
     for (const source of sources) {
       for await (const chunk of this.chunks(meetingId, source, chunkLimit, signal)) {
         const material = renderMaterial(source, chunk)
