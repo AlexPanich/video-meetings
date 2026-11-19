@@ -8,6 +8,7 @@ export type {
   CallToolResult,
   CanUseTool,
   ContentBlock,
+  ContextLimits,
   HookCallback,
   HookCallbackMatcher,
   HookEvent,
@@ -85,3 +86,26 @@ export const createSdkMcpServer = sdk.createSdkMcpServer
 /** Хранилище сессий в памяти процесса (`options.sessionStore`) — для тестов и разработки. */
 export const InMemorySessionStore = sdk.InMemorySessionStore
 export type InMemorySessionStore = InstanceType<typeof LocalSdk.InMemorySessionStore>
+
+/**
+ * Границы окна контекста `claude-agent-sdk`: SDK их не экспортирует. Окно Claude — 200 000
+ * токенов, под ответ — 32 000 (максимум вывода моделей Claude по умолчанию), символов на токен —
+ * как у локального SDK, консервативно.
+ */
+export const ANTHROPIC_CONTEXT_LIMITS: Readonly<LocalSdk.ContextLimits> = Object.freeze({
+  numCtx: 200_000,
+  outputReserveTokens: 32_000,
+  inputTokens: 168_000,
+  charsPerToken: 3,
+})
+
+/**
+ * Границы окна контекста выбранной реализации: при `local` — те же, что использует локальный SDK
+ * (`OLLAMA_NUM_CTX` читается при каждом вызове, некорректное значение — ошибка с именем
+ * переменной), при `anthropic` — `ANTHROPIC_CONTEXT_LIMITS`. Расширение фасада: в оригинальном
+ * SDK такой функции нет.
+ */
+export const contextLimits: () => LocalSdk.ContextLimits =
+  provider === 'anthropic'
+    ? () => ({ ...ANTHROPIC_CONTEXT_LIMITS })
+    : await import('@video-meetings/llm-sdk').then((local) => () => local.contextLimits())

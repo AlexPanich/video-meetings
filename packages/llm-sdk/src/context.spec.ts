@@ -1,5 +1,5 @@
 // Unit-тесты оценки бюджета контекста.
-import { ContextBudget, ContextOverflowError } from './context.js'
+import { ContextBudget, ContextOverflowError, contextLimits } from './context.js'
 import type { OllamaMessage } from './ollama.js'
 
 const user = (content: string): OllamaMessage => ({ role: 'user', content })
@@ -63,5 +63,35 @@ describe('ContextBudget.fit', () => {
     expect(fitted.messages).toBe(messages)
     expect(fitted.numPredict).toBe(4096 - budget.estimate(messages))
     expect(fitted.numPredict).toBeGreaterThanOrEqual(budget.outputReserve)
+  })
+})
+
+describe('contextLimits', () => {
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('совпадает с бюджетом query(): четверть окна под ответ, не больше 4096 токенов', () => {
+    expect(contextLimits(8192)).toEqual({
+      numCtx: 8192,
+      outputReserveTokens: 2048,
+      inputTokens: 6144,
+      charsPerToken: 3,
+    })
+    expect(contextLimits(32_768)).toMatchObject({ outputReserveTokens: 4096, inputTokens: 28_672 })
+    for (const numCtx of [1024, 8192, 32_768, 131_072]) {
+      const budget = new ContextBudget(numCtx, [])
+      expect(contextLimits(numCtx)).toMatchObject({
+        outputReserveTokens: budget.outputReserve,
+        inputTokens: budget.inputTokens,
+      })
+    }
+  })
+
+  it('по умолчанию — OLLAMA_NUM_CTX, некорректное значение — ошибка с именем переменной', () => {
+    vi.stubEnv('OLLAMA_NUM_CTX', '16384')
+    expect(contextLimits().numCtx).toBe(16_384)
+    vi.stubEnv('OLLAMA_NUM_CTX', undefined)
+    expect(contextLimits().numCtx).toBe(32_768)
+    vi.stubEnv('OLLAMA_NUM_CTX', 'много')
+    expect(() => contextLimits()).toThrow('OLLAMA_NUM_CTX must be a positive integer')
   })
 })

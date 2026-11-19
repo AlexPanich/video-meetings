@@ -1,4 +1,5 @@
 export { AbortError } from './abort.js'
+export { contextLimits, type ContextLimits } from './context.js'
 export { query } from './query.js'
 export { InMemorySessionStore } from './sessions.js'
 export { createSdkMcpServer, tool } from './tools.js'

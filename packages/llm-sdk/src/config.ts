@@ -18,9 +18,14 @@ export function readOllamaConfig(env: Env = process.env): OllamaConfig {
   return {
     url: baseUrl(nonEmpty(env.OLLAMA_URL) ?? DEFAULT_OLLAMA_URL),
     model: nonEmpty(env.OLLAMA_MODEL) ?? DEFAULT_OLLAMA_MODEL,
-    numCtx: positiveInt(env, 'OLLAMA_NUM_CTX', DEFAULT_OLLAMA_NUM_CTX),
+    numCtx: readNumCtx(env),
     timeoutMs: positiveInt(env, 'OLLAMA_TIMEOUT_MS', DEFAULT_OLLAMA_TIMEOUT_MS),
   }
+}
+
+/** Окно контекста из `OLLAMA_NUM_CTX`; некорректное значение — ошибка с именем переменной. */
+export function readNumCtx(env: Env = process.env): number {
+  return positiveInt(env, 'OLLAMA_NUM_CTX', DEFAULT_OLLAMA_NUM_CTX)
 }
 
 function nonEmpty(value: string | undefined): string | undefined {
