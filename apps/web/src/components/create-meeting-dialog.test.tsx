@@ -72,6 +72,28 @@ const submitTitle = async (user: ReturnType<typeof userEvent.setup>, title: stri
   await user.click(screen.getByRole('button', { name: 'Создать' }))
 }
 
+const participantInput = () => screen.getByRole('textbox', { name: 'Участники' })
+
+// Теги участников — строки сетки TagGroup (React Aria) с подписью «Участники»
+const tags = () => {
+  const grid = screen.queryByRole('grid', { name: 'Участники' })
+  if (!grid) return []
+  return within(grid)
+    .queryAllByRole('row')
+    .map((row) => row.textContent?.trim())
+}
+
+// Вставка, а не набор: так без искажений доходят управляющие символы и длинная строка
+const pasteParticipant = async (user: ReturnType<typeof userEvent.setup>, name: string) => {
+  await user.click(participantInput())
+  await user.paste(name)
+}
+
+const sentBody = () => {
+  const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+  return JSON.parse(String(init.body)) as { participants: string[] }
+}
+
 describe('CreateMeetingDialog', () => {
   it('окно закрыто, пока не нажата кнопка «Создать встречу»', () => {
     render(<CreateMeetingDialog />)
@@ -211,5 +233,223 @@ describe('CreateMeetingDialog', () => {
     expect(await within(dialog).findByText(message)).toBeInTheDocument()
     expect(fetchMock).not.toHaveBeenCalled()
     expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+
+  describe('участники', () => {
+    it('Enter превращает имя в тег и очищает ввод, форма при этом не отправляется', async () => {
+      const { user } = await openDialog()
+
+      await user.type(participantInput(), '  Анна Петрова  {Enter}')
+
+      expect(tags()).toEqual(['Анна Петрова'])
+      expect(participantInput()).toHaveValue('')
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+
+    it('запятая превращает имя в тег и очищает ввод', async () => {
+      const { user } = await openDialog()
+
+      await user.type(participantInput(), 'Анна,Борис,')
+
+      expect(tags()).toEqual(['Анна', 'Борис'])
+      expect(participantInput()).toHaveValue('')
+    })
+
+    it('вставка «Анна, Борис, Вера» — теги до последней запятой, остаток в поле', async () => {
+      const { user } = await openDialog()
+
+      await pasteParticipant(user, 'Анна, Борис, Вера')
+
+      expect(tags()).toEqual(['Анна', 'Борис'])
+      expect(participantInput()).toHaveValue(' Вера')
+    })
+
+    it('пустой ввод по Enter тег не добавляет', async () => {
+      const { user } = await openDialog()
+
+      await user.type(participantInput(), '   {Enter}')
+
+      expect(tags()).toEqual([])
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('крестик удаляет тег', async () => {
+      const { user } = await openDialog()
+      await user.type(participantInput(), 'Анна{Enter}Борис{Enter}')
+
+      await user.click(screen.getByRole('button', { name: 'Удалить Анна' }))
+
+      expect(tags()).toEqual(['Борис'])
+    })
+
+    it('Backspace в пустом поле удаляет последний тег, в непустом — только символ', async () => {
+      const { user } = await openDialog()
+      await user.type(participantInput(), 'Анна{Enter}Борис{Enter}Ве')
+
+      await user.keyboard('{Backspace}')
+      expect(tags()).toEqual(['Анна', 'Борис'])
+      expect(participantInput()).toHaveValue('В')
+
+      await user.keyboard('{Backspace}{Backspace}')
+      expect(tags()).toEqual(['Анна'])
+      expect(participantInput()).toHaveValue('')
+    })
+
+    it.each([
+      ['другой регистр', 'АННА'],
+      ['пробелы по краям и внутри', '  анна   петрова  '],
+    ])('повтор (%s) тег не добавляет, причина показывается', async (_, name) => {
+      const { user, dialog } = await openDialog()
+      await user.type(participantInput(), 'Анна Петрова{Enter}')
+
+      await user.type(participantInput(), `${name}{Enter}`)
+
+      expect(tags()).toEqual(['Анна Петрова'])
+      expect(
+        await within(dialog).findByText('Участник «Анна Петрова» уже добавлен'),
+      ).toBeInTheDocument()
+      expect(participantInput()).toHaveAttribute('aria-invalid', 'true')
+    })
+
+    it.each([
+      ['длиннее 100 символов', 'я'.repeat(101), 'Имя участника не длиннее 100 символов'],
+      ['с управляющими символами', 'Ан\u0007на', 'Имя участника содержит недопустимые символы'],
+    ])('имя %s не добавляется, причина показывается', async (_, name, message) => {
+      const { user, dialog } = await openDialog()
+
+      await pasteParticipant(user, name)
+      await user.keyboard('{Enter}')
+
+      expect(tags()).toEqual([])
+      expect(await within(dialog).findByText(message)).toBeInTheDocument()
+      expect(participantInput()).toHaveAttribute('aria-invalid', 'true')
+      // ввод остаётся, чтобы его можно было исправить
+      expect(participantInput()).toHaveValue(name)
+    })
+
+    it('ошибка снимается, когда ввод меняется', async () => {
+      const { user, dialog } = await openDialog()
+      await pasteParticipant(user, 'я'.repeat(101))
+      await user.keyboard('{Enter}')
+      await within(dialog).findByText('Имя участника не длиннее 100 символов')
+
+      await user.keyboard('{Backspace}')
+
+      expect(
+        within(dialog).queryByText('Имя участника не длиннее 100 символов'),
+      ).not.toBeInTheDocument()
+      expect(participantInput()).not.toHaveAttribute('aria-invalid', 'true')
+    })
+
+    it('51-й участник не добавляется, причина показывается', async () => {
+      const { user, dialog } = await openDialog()
+      const fifty = Array.from({ length: 50 }, (_, i) => `Участник ${i + 1}`)
+      await pasteParticipant(user, `${fifty.join(',')},`)
+      expect(tags()).toHaveLength(50)
+
+      await user.type(participantInput(), 'Лишний{Enter}')
+
+      expect(tags()).toHaveLength(50)
+      expect(await within(dialog).findByText('Участников не больше 50')).toBeInTheDocument()
+    })
+
+    it('теги и невписанное в тег имя уходят в запрос создания', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(201, created))
+      const { user } = await openDialog()
+      await user.type(participantInput(), 'Анна{Enter}Борис,')
+      await user.type(participantInput(), '  Вера  ')
+
+      await submitTitle(user, 'Планёрка')
+
+      await waitFor(() => expect(router.push).toHaveBeenCalledWith('/meetings/m1'))
+      expect(sentBody().participants).toEqual(['Анна', 'Борис', 'Вера'])
+    })
+
+    it('без участников уходит пустой список', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(201, created))
+      const { user } = await openDialog()
+      await user.type(participantInput(), '   ')
+
+      await submitTitle(user, 'Планёрка')
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+      expect(sentBody().participants).toEqual([])
+    })
+
+    it('невписанный повтор при отправке не дублируется', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(201, created))
+      const { user } = await openDialog()
+      await user.type(participantInput(), 'Анна{Enter}анна')
+
+      await submitTitle(user, 'Планёрка')
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+      expect(sentBody().participants).toEqual(['Анна'])
+    })
+
+    it.each([
+      ['длиннее 100 символов', 'я'.repeat(101), 'Имя участника не длиннее 100 символов'],
+      ['с управляющими символами', 'Ан\u0007на', 'Имя участника содержит недопустимые символы'],
+    ])(
+      'невписанное имя %s не даёт отправить форму, причина показывается',
+      async (_, name, message) => {
+        const { user, dialog } = await openDialog()
+        await pasteParticipant(user, name)
+
+        await submitTitle(user, 'Планёрка')
+
+        expect(await within(dialog).findByText(message)).toBeInTheDocument()
+        expect(fetchMock).not.toHaveBeenCalled()
+        expect(screen.getByRole('dialog')).toBeInTheDocument()
+      },
+    )
+
+    it('невписанное 51-е имя не даёт отправить форму', async () => {
+      const { user, dialog } = await openDialog()
+      const fifty = Array.from({ length: 50 }, (_, i) => `Участник ${i + 1}`)
+      await pasteParticipant(user, `${fifty.join(',')},Лишний`)
+
+      await submitTitle(user, 'Планёрка')
+
+      expect(await within(dialog).findByText('Участников не больше 50')).toBeInTheDocument()
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('ошибка участников от API показывается в окне, даже если она не первая', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse(400, {
+          statusCode: 400,
+          message: [
+            'Название должно быть не длиннее 200 символов',
+            'Имя участника содержит недопустимые символы',
+          ],
+        }),
+      )
+      const { user, dialog } = await openDialog()
+      await user.type(participantInput(), 'Анна{Enter}')
+
+      await submitTitle(user, 'Планёрка')
+
+      const alert = await within(dialog).findByRole('alert')
+      expect(alert).toHaveTextContent('Название должно быть не длиннее 200 символов')
+      expect(alert).toHaveTextContent('Имя участника содержит недопустимые символы')
+      expect(router.push).not.toHaveBeenCalled()
+      // введённые участники не теряются
+      expect(tags()).toEqual(['Анна'])
+    })
+
+    it('при повторном открытии окна участники и ввод сброшены', async () => {
+      const { user } = await openDialog()
+      await user.type(participantInput(), 'Анна{Enter}Бо')
+      await user.click(screen.getByRole('button', { name: 'Отмена' }))
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+      await user.click(screen.getByRole('button', { name: 'Создать встречу' }))
+      await screen.findByRole('dialog')
+
+      expect(tags()).toEqual([])
+      expect(participantInput()).toHaveValue('')
+    })
   })
 })

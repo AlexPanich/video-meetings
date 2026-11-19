@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { MeetingDetails } from './meeting-details'
 
 const getMeeting = vi.fn()
@@ -45,6 +45,29 @@ describe('MeetingDetails', () => {
     expect(screen.getByText('files:m1')).toBeInTheDocument()
     expect(screen.getByText('summary:m1')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Все встречи/ })).toHaveAttribute('href', '/')
+  })
+
+  it('показывает имена участников списком в порядке ввода', async () => {
+    getMeeting.mockResolvedValue({
+      ok: true,
+      data: { ...meeting, participants: ['Анна Петрова', 'Борис', 'Вера'] },
+    })
+    await render_()
+
+    const list = screen.getByRole('list', { name: 'Участники' })
+    expect(
+      within(list)
+        .getAllByRole('listitem')
+        .map((item) => item.textContent),
+    ).toEqual(['Анна Петрова', 'Борис', 'Вера'])
+  })
+
+  it('без участников списка нет', async () => {
+    getMeeting.mockResolvedValue({ ok: true, data: { ...meeting, participants: [] } })
+    await render_()
+
+    expect(screen.getByText(/0 участн\./)).toBeInTheDocument()
+    expect(screen.queryByRole('list', { name: 'Участники' })).not.toBeInTheDocument()
   })
 
   it('токен отклонён — редирект на /login', async () => {

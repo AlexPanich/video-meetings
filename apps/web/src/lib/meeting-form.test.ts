@@ -1,8 +1,12 @@
 import {
+  MEETING_PARTICIPANTS_MAX,
   MEETING_TITLE_MAX_LENGTH,
+  PARTICIPANT_NAME_MAX_LENGTH,
   defaultMeetingStart,
   localDateTimeToIso,
+  participantKey,
   validateMeetingTitle,
+  validateParticipant,
 } from './meeting-form'
 
 // Часовой пояс «браузера» с ненулевым смещением (UTC+5, без перехода на летнее время):
@@ -114,5 +118,68 @@ describe('localDateTimeToIso', () => {
     it('из двух 02:30 при переводе назад берётся первое, летнее (00:30 UTC)', () => {
       expect(localDateTimeToIso('2030-10-27', '02:30')).toBe('2030-10-27T00:30:00.000Z')
     })
+  })
+})
+
+// Ключ повтора — как `participantKey` в `apps/api/src/meetings/participants.ts`
+describe('participantKey', () => {
+  it.each([
+    ['регистр', 'Анна Петрова', 'анна петрова'],
+    ['пробелы по краям', '  Анна  ', 'Анна'],
+    ['несколько пробелов внутри', 'Анна  Петрова', 'Анна Петрова'],
+    ['неразрывный пробел', 'Анна Петрова', 'Анна Петрова'],
+    ['невидимый символ', 'Ан​на', 'Анна'],
+    ['полноширинные буквы (NFKC)', 'ＡＮＮＡ', 'anna'],
+    ['ß и SS', 'Straße', 'STRASSE'],
+  ])('одинаковый ключ: %s', (_, a, b) => {
+    expect(participantKey(a)).toBe(participantKey(b))
+  })
+
+  it('разные имена — разные ключи', () => {
+    expect(participantKey('Анна')).not.toBe(participantKey('Анна П.'))
+  })
+})
+
+describe('validateParticipant', () => {
+  it('новое имя допустимо', () => {
+    expect(validateParticipant('Анна', ['Борис'])).toBeNull()
+  })
+
+  it.each([
+    ['пустое', ''],
+    ['из пробелов', '   '],
+    ['из невидимых символов', '​​'],
+  ])('имя %s — «Введите имя участника»', (_, value) => {
+    expect(validateParticipant(value, [])).toBe('Введите имя участника')
+  })
+
+  it.each([
+    ['управляющим символом', 'Ан\u0007на'],
+    ['переводом строки', 'Ан\nна'],
+    ['bidi-символом', 'Ан‮на'],
+  ])('имя с %s — недопустимые символы', (_, value) => {
+    expect(validateParticipant(value, [])).toBe('Имя участника содержит недопустимые символы')
+  })
+
+  it('длиннее 100 символов после обрезки — ошибка длины', () => {
+    expect(validateParticipant('я'.repeat(PARTICIPANT_NAME_MAX_LENGTH + 1), [])).toBe(
+      'Имя участника не длиннее 100 символов',
+    )
+  })
+
+  it('ровно 100 символов (эмодзи — один символ), пробелы по краям не считаются', () => {
+    expect(validateParticipant(`  ${'😀'.repeat(PARTICIPANT_NAME_MAX_LENGTH)}  `, [])).toBeNull()
+  })
+
+  it('повтор без учёта регистра и пробелов — уже добавлен (с написанием из списка)', () => {
+    expect(validateParticipant('  анна  ПЕТРОВА ', ['Анна Петрова'])).toBe(
+      'Участник «Анна Петрова» уже добавлен',
+    )
+  })
+
+  it('51-й участник — лимит', () => {
+    const fifty = Array.from({ length: MEETING_PARTICIPANTS_MAX }, (_, i) => `Участник ${i + 1}`)
+    expect(validateParticipant('Новый', fifty)).toBe('Участников не больше 50')
+    expect(validateParticipant('Новый', fifty.slice(1))).toBeNull()
   })
 })
