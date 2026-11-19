@@ -1,16 +1,49 @@
 // Контроль размера контекста: вход сверх `num_ctx` Ollama молча отбрасывает, поэтому SDK сам
 // оценивает объём запроса и усекает старые результаты инструментов.
+import { readNumCtx } from './config.js'
 import type { OllamaMessage, OllamaTool } from './ollama.js'
 
 /** Начальная (консервативная) оценка: символов на токен. Русский текст у Qwen — около 3. */
-const DEFAULT_CHARS_PER_TOKEN = 3
+export const DEFAULT_CHARS_PER_TOKEN = 3
 /** Служебные токены шаблона чата на сообщение. */
 const MESSAGE_OVERHEAD_TOKENS = 8
 /** Запас на пометку об усечении. */
 const MARKER_RESERVE_CHARS = 120
 /** Доля окна под ответ модели (вход и выход делят `num_ctx`), но не больше 4096 токенов. */
-const OUTPUT_RESERVE_SHARE = 0.25
-const OUTPUT_RESERVE_MAX_TOKENS = 4096
+export const OUTPUT_RESERVE_SHARE = 0.25
+export const OUTPUT_RESERVE_MAX_TOKENS = 4096
+
+/**
+ * Границы окна контекста, по которым SDK усекает запрос. Расширение локального SDK (в оригинале
+ * нет): по нему приложение заранее решает, сколько материалов отдать модели за один запрос.
+ */
+export interface ContextLimits {
+  /** Окно, токенов (`num_ctx`). */
+  numCtx: number
+  /** Токенов под ответ: гарантированный минимум `num_predict`. */
+  outputReserveTokens: number
+  /** Токенов на вход: всё, что больше, SDK усекает. */
+  inputTokens: number
+  /**
+   * Начальная оценка символов на токен. В сессии SDK уточняет её по `prompt_eval_count` Ollama,
+   * но только в меньшую сторону, поэтому реальный бюджет в символах может оказаться меньше.
+   */
+  charsPerToken: number
+}
+
+/** Границы окна для `numCtx` (по умолчанию — `OLLAMA_NUM_CTX`), те же, что в `query()`. */
+export function contextLimits(numCtx: number = readNumCtx()): ContextLimits {
+  const outputReserveTokens = Math.min(
+    OUTPUT_RESERVE_MAX_TOKENS,
+    Math.floor(numCtx * OUTPUT_RESERVE_SHARE),
+  )
+  return {
+    numCtx,
+    outputReserveTokens,
+    inputTokens: numCtx - outputReserveTokens,
+    charsPerToken: DEFAULT_CHARS_PER_TOKEN,
+  }
+}
 
 /** Вход не помещается в `num_ctx` даже после усечения: запрос не отправляется. */
 export class ContextOverflowError extends Error {
@@ -36,7 +69,7 @@ export interface FittedRequest {
  * не недооценить вход.
  */
 export class ContextBudget {
-  private charsPerToken = DEFAULT_CHARS_PER_TOKEN
+  private charsPerToken: number
   /** Символов в описаниях инструментов: набор в сессии не меняется, считается один раз. */
   private readonly toolsChars: number
   /** Токенов под ответ: гарантированный минимум `num_predict`. */
@@ -48,11 +81,10 @@ export class ContextBudget {
     private readonly numCtx: number,
     tools: OllamaTool[],
   ) {
-    this.outputReserve = Math.min(
-      OUTPUT_RESERVE_MAX_TOKENS,
-      Math.floor(numCtx * OUTPUT_RESERVE_SHARE),
-    )
-    this.inputTokens = numCtx - this.outputReserve
+    const limits = contextLimits(numCtx)
+    this.outputReserve = limits.outputReserveTokens
+    this.inputTokens = limits.inputTokens
+    this.charsPerToken = limits.charsPerToken
     this.toolsChars = tools.length > 0 ? JSON.stringify(tools).length : 0
   }
 

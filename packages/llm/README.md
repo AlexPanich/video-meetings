@@ -26,6 +26,14 @@ MCP-серверов (`McpStdioServerConfig`, `McpHttpServerConfig`, `McpSSEServ
 в `switch` по типу сообщения, текст только из блоков `text`, `structured_output` как `unknown`) —
 в [README `llm-sdk`](../llm-sdk/README.md#правила-для-кода-фич).
 
+Расширение фасада (в оригинальном SDK нет): `contextLimits()` — границы окна контекста
+выбранной реализации (`ContextLimits`: `numCtx`, `outputReserveTokens`, `inputTokens`,
+`charsPerToken`). При `local` — расчёт локального SDK, по которому он усекает запрос
+(`OLLAMA_NUM_CTX` читается при каждом вызове, некорректное значение — ошибка с именем переменной);
+при `anthropic` — `ANTHROPIC_CONTEXT_LIMITS` (окно 200 000 токенов, 32 000 под ответ, 3 символа
+на токен): `claude-agent-sdk` этих чисел не экспортирует. По ним код фич заранее решает, сколько
+материалов отдать модели за один запрос, не копируя константы SDK.
+
 ## Проверки
 
 ```bash

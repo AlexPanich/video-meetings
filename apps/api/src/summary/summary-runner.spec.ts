@@ -224,6 +224,20 @@ describe('SummaryRunner: транскрибация', () => {
     vi.unstubAllEnvs()
   })
 
+  it('маленький OLLAMA_NUM_CTX → failed сразу, до транскрибации и агента', async () => {
+    vi.stubEnv('OLLAMA_NUM_CTX', '4096')
+    const prisma = prismaMock()
+    const agent = { run: vi.fn().mockResolvedValue(RESULT) }
+    const transcriber = noTranscripts()
+
+    await new SummaryRunner(prisma as never, agent as never, transcriber as never).run('meeting-1')
+
+    expect(transcriber.prepare).not.toHaveBeenCalled()
+    expect(agent.run).not.toHaveBeenCalled()
+    expect(lastWrite(prisma)).toMatchObject({ status: 'failed' })
+    expect(String(lastWrite(prisma)?.error)).toMatch(/^OLLAMA_NUM_CTX слишком мал для саммари/)
+  })
+
   it('pending → transcribing → generating → done, агент получает транскрипты', async () => {
     const prisma = prismaMock()
     const agent = { run: vi.fn().mockResolvedValue(RESULT) }

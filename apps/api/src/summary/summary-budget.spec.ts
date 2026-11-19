@@ -1,37 +1,75 @@
 import { sliceChunk } from './summary-agent.js'
+import { ANTHROPIC_CONTEXT_LIMITS, contextLimits, type ContextLimits } from '@video-meetings/llm'
+import { SummaryError } from './summary.js'
 import {
-  ANTHROPIC_CONTEXT_TOKENS,
-  getNumCtx,
   materialBudgetBytes,
-  MIN_CHUNK_BYTES,
+  MIN_MATERIAL_BUDGET_BYTES,
+  RECOMMENDED_MIN_NUM_CTX,
 } from './summary-budget.js'
+
+const limitsFor = (numCtx: number): ContextLimits => {
+  vi.stubEnv('OLLAMA_NUM_CTX', String(numCtx))
+  return contextLimits()
+}
 
 describe('materialBudgetBytes', () => {
   afterEach(() => vi.unstubAllEnvs())
 
   it('растёт вместе с num_ctx и оставляет место под промпт и ответ', () => {
-    const small = materialBudgetBytes(8192)
-    const large = materialBudgetBytes(32_768)
+    const small = materialBudgetBytes(limitsFor(8192))
+    const large = materialBudgetBytes(limitsFor(32_768))
     expect(large).toBeGreaterThan(small * 3)
-    // бюджет в байтах меньше окна в символах (≈ 3 на токен): место под промпт, ответ и запас
-    expect(large).toBeLessThan(32_768 * 3)
+    // бюджет в байтах меньше входа SDK в символах: место под промпт и запас
+    const { inputTokens, charsPerToken } = limitsFor(32_768)
+    expect(large).toBeLessThan(inputTokens * charsPerToken)
   })
 
-  it('не меньше минимальной части даже при крошечном окне', () => {
-    expect(materialBudgetBytes(1024)).toBe(MIN_CHUNK_BYTES)
+  it('резерв под ответ — из SDK: бюджет считается от inputTokens фасада', () => {
+    const limits = limitsFor(32_768)
+    const shrunk = { ...limits, inputTokens: limits.inputTokens - 1000 }
+    expect(materialBudgetBytes(limits) - materialBudgetBytes(shrunk)).toBe(
+      Math.floor(1000 * limits.charsPerToken * 0.75),
+    )
   })
 
-  it('берёт num_ctx из OLLAMA_NUM_CTX, некорректное значение — по умолчанию', () => {
-    vi.stubEnv('OLLAMA_NUM_CTX', '8192')
-    expect(getNumCtx()).toBe(8192)
-    expect(materialBudgetBytes()).toBe(materialBudgetBytes(8192))
+  it('берёт окно из OLLAMA_NUM_CTX через фасад', () => {
+    vi.stubEnv('OLLAMA_NUM_CTX', '16384')
+    expect(materialBudgetBytes()).toBe(materialBudgetBytes(limitsFor(16_384)))
+  })
+
+  it('некорректный OLLAMA_NUM_CTX — SummaryError с именем переменной', () => {
     vi.stubEnv('OLLAMA_NUM_CTX', 'много')
-    expect(getNumCtx()).toBe(32_768)
+    expect(() => materialBudgetBytes()).toThrow(SummaryError)
+    expect(() => materialBudgetBytes()).toThrow(/OLLAMA_NUM_CTX/)
   })
 
-  it('для anthropic — окно Claude, OLLAMA_NUM_CTX не влияет', () => {
-    vi.stubEnv('OLLAMA_NUM_CTX', '8192')
-    expect(getNumCtx('anthropic')).toBe(ANTHROPIC_CONTEXT_TOKENS)
+  it('маленький OLLAMA_NUM_CTX — SummaryError с указанием на настройку', () => {
+    vi.stubEnv('OLLAMA_NUM_CTX', '4096')
+    const error = (() => {
+      try {
+        materialBudgetBytes()
+      } catch (caught) {
+        return caught
+      }
+    })()
+    expect(error).toBeInstanceOf(SummaryError)
+    expect((error as Error).message).toMatch(
+      new RegExp(
+        `^OLLAMA_NUM_CTX слишком мал для саммари: окно 4096 токенов.*не меньше ${RECOMMENDED_MIN_NUM_CTX}$`,
+      ),
+    )
+  })
+
+  it(`рекомендуемое окно ${RECOMMENDED_MIN_NUM_CTX} проходит проверку`, () => {
+    expect(materialBudgetBytes(limitsFor(RECOMMENDED_MIN_NUM_CTX))).toBeGreaterThanOrEqual(
+      MIN_MATERIAL_BUDGET_BYTES,
+    )
+  })
+
+  it('для anthropic — окно Claude из фасада', () => {
+    expect(materialBudgetBytes(ANTHROPIC_CONTEXT_LIMITS)).toBeGreaterThan(
+      materialBudgetBytes(limitsFor(32_768)) * 5,
+    )
   })
 })
 

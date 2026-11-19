@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service.js'
 import { MeetingTranscriber } from '../transcription/meeting-transcriber.js'
 import { TranscriptionError } from '../transcription/whisper-client.js'
 import { SummaryAgent } from './summary-agent.js'
+import { materialBudgetBytes } from './summary-budget.js'
 import { SummaryError, type SummaryResult } from './summary.js'
 
 // ограничение на задачу целиком (`SUMMARY_TIMEOUT_MS`), транскрибация включительно:
@@ -170,6 +171,8 @@ export class SummaryRunner implements OnModuleDestroy {
 
     try {
       const result = await this.withTimeout(controller, async () => {
+        // ошибка настройки окна (`OLLAMA_NUM_CTX`) — сразу, а не после минут работы Whisper
+        materialBudgetBytes()
         const transcripts = await this.transcriber.prepare(meetingId, signal, () =>
           advance('transcribing'),
         )

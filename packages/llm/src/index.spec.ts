@@ -80,6 +80,26 @@ describe('фасад @video-meetings/llm: выбор реализации', () =
     )
   })
 
+  it('contextLimits: при local — расчёт локального SDK по OLLAMA_NUM_CTX', async () => {
+    vi.stubEnv('LLM_PROVIDER', 'local')
+    const facade = await loadFacade()
+    const local = await import('@video-meetings/llm-sdk')
+
+    vi.stubEnv('OLLAMA_NUM_CTX', '8192')
+    expect(facade.contextLimits()).toEqual(local.contextLimits(8192))
+    vi.stubEnv('OLLAMA_NUM_CTX', '0')
+    expect(() => facade.contextLimits()).toThrow('OLLAMA_NUM_CTX')
+  })
+
+  it('contextLimits: при anthropic — окно Claude, OLLAMA_NUM_CTX не влияет', async () => {
+    vi.stubEnv('LLM_PROVIDER', 'anthropic')
+    vi.stubEnv('OLLAMA_NUM_CTX', '8192')
+    const facade = await loadFacade()
+
+    expect(facade.contextLimits()).toEqual(facade.ANTHROPIC_CONTEXT_LIMITS)
+    expect(facade.contextLimits().inputTokens).toBe(200_000 - 32_000)
+  })
+
   it('сообщает выбранный провайдер', async () => {
     vi.stubEnv('LLM_PROVIDER', 'local')
     expect((await loadFacade()).provider).toBe('local')
