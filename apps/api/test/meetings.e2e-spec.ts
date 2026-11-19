@@ -115,8 +115,9 @@ describe('Meetings (e2e)', () => {
 
   describe('POST /meetings: правила названия, участников и даты', () => {
     // сообщения ValidationPipe — массив строк; понятное сообщение — на русском и называет поле
-    const expectMessage = (body: { message: unknown }, pattern: RegExp) => {
-      const messages: string[] = Array.isArray(body.message) ? body.message : [String(body.message)]
+    const expectMessage = (body: unknown, pattern: RegExp) => {
+      const { message } = body as { message: unknown }
+      const messages: string[] = Array.isArray(message) ? message : [String(message)]
       expect(messages.some((m) => pattern.test(m))).toBe(true)
     }
 
