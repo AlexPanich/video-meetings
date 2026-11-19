@@ -16,7 +16,14 @@ import {
 } from '@heroui/react'
 import { type CalendarDate, type Time, parseDate, parseTime } from '@internationalized/date'
 import { useRouter } from 'next/navigation'
-import { type ComponentProps, type SyntheticEvent, useRef, useState, useTransition } from 'react'
+import {
+  type ComponentProps,
+  type SyntheticEvent,
+  useEffect,
+  useRef,
+  useState,
+  useTransition,
+} from 'react'
 import { ParticipantsField } from '@/components/participants-field'
 import { ApiError, createMeeting } from '@/lib/api'
 import {
@@ -39,7 +46,8 @@ const requiredMessage =
 
 // Частично стёртое поле даты или времени: React Aria держит неполный ввод только в отображении,
 // `onChange` не вызывает и оставляет прежнее значение (null — лишь когда стёрты все сегменты).
-// Пустой сегмент помечается `data-placeholder`
+// Пустой сегмент помечается `data-placeholder` (React Aria); `data-field` — на своей обёртке поля,
+// а не пропом компонента HeroUI, который может перестать пробрасываться в DOM
 const hasEmptySegment = (form: HTMLFormElement, field: 'date' | 'time') =>
   form.querySelector(`[data-field="${field}"] [data-placeholder]`) !== null
 
@@ -66,6 +74,21 @@ export function CreateMeetingDialog() {
   const [navigating, startTransition] = useTransition()
   const pending = requesting || navigating
   const submitting = useRef(false)
+  // Номер текущего запроса: при скрытии страницы растёт, и поздний ответ старого запроса не
+  // переводит на встречу и не показывает ошибку, когда пользователь уже ушёл (или вернулся)
+  const requestId = useRef(0)
+
+  // Next 16 скрывает ушедшую страницу (Activity), а не размонтирует: окно с черновиком и загрузкой
+  // иначе вернулось бы при возврате на главную — в том числе другому пользователю после 401 и входа
+  useEffect(
+    () => () => {
+      requestId.current += 1
+      submitting.current = false
+      setRequesting(false)
+      setIsOpen(false)
+    },
+    [],
+  )
 
   // Значения по умолчанию считаются при каждом открытии: окно могли открыть через час после загрузки
   const open = () => {
@@ -74,9 +97,6 @@ export function CreateMeetingDialog() {
     setTime(parseTime(start.time))
     setDateIncomplete(false)
     setTimeIncomplete(false)
-    // после 401 загрузка остаётся до ухода на вход; Next 16 скрывает главную, а не размонтирует,
-    // поэтому при возврате окно открывается уже без неё (закрытое окно запросов не ведёт)
-    setRequesting(false)
     submitting.current = false
     setParticipants([])
     setParticipantInput('')
@@ -133,6 +153,7 @@ export function CreateMeetingDialog() {
     submitting.current = true
     setRequesting(true)
     setError(null)
+    const id = ++requestId.current
     void (async () => {
       try {
         const meeting = await createMeeting({
@@ -140,6 +161,7 @@ export function CreateMeetingDialog() {
           date: startsAt,
           participants: sentParticipants,
         })
+        if (id !== requestId.current) return
         // 2xx без id (неожиданный ответ BFF) не должен вести на `/meetings/undefined`
         if (typeof meeting?.id !== 'string' || !meeting.id) {
           throw new ApiError('Что-то пошло не так', 0)
@@ -158,10 +180,15 @@ export function CreateMeetingDialog() {
         })
         submitting.current = false
       } catch (e) {
+        if (id !== requestId.current) return
         if (e instanceof ApiError && e.status === 401) {
-          // загрузка и ref остаются до ухода на вход: форму с истёкшей сессией повторно
-          // не отправить и окно не закрыть; снимает их следующее открытие окна
-          router.replace('/login')
+          // Окно закрывается в том же переходе, что и уход на вход: пока он идёт, `navigating`
+          // держит загрузку, а ref — защиту от повторной отправки (снимет следующее открытие)
+          startTransition(() => {
+            router.replace('/login')
+            setIsOpen(false)
+            setRequesting(false)
+          })
           return
         }
         submitting.current = false
@@ -211,6 +238,9 @@ export function CreateMeetingDialog() {
                   variant="secondary"
                   name="title"
                   validate={validateMeetingTitle}
+                  // все поля заблокированы на время запроса: иначе при ошибке 400 причина из API
+                  // относилась бы не к тому, что видно в поле
+                  isDisabled={pending}
                 >
                   <Label>Название</Label>
                   <Input placeholder="Например, планёрка команды" />
@@ -225,52 +255,58 @@ export function CreateMeetingDialog() {
                   onKeyUp={recheckSegments}
                   onBlur={recheckSegments}
                 >
-                  <DateField
-                    fullWidth
-                    name="date"
-                    value={date}
-                    onChange={(next) => {
-                      setDate(next)
-                      setDateIncomplete(false)
-                    }}
-                    granularity="day"
-                    isRequired
-                    isInvalid={dateIncomplete || undefined}
-                  >
-                    <Label>Дата</Label>
-                    <DateField.Group variant="secondary" data-field="date">
-                      <DateField.Input>
-                        {(segment) => <DateField.Segment segment={segment} />}
-                      </DateField.Input>
-                    </DateField.Group>
-                    <div className="min-h-5">
-                      <FieldError>{requiredMessage('Укажите дату', dateIncomplete)}</FieldError>
-                    </div>
-                  </DateField>
+                  <div data-field="date" className="min-w-0 flex-1">
+                    <DateField
+                      fullWidth
+                      isDisabled={pending}
+                      name="date"
+                      value={date}
+                      onChange={(next) => {
+                        setDate(next)
+                        setDateIncomplete(false)
+                      }}
+                      granularity="day"
+                      isRequired
+                      isInvalid={dateIncomplete || undefined}
+                    >
+                      <Label>Дата</Label>
+                      <DateField.Group variant="secondary">
+                        <DateField.Input>
+                          {(segment) => <DateField.Segment segment={segment} />}
+                        </DateField.Input>
+                      </DateField.Group>
+                      <div className="min-h-5">
+                        <FieldError>{requiredMessage('Укажите дату', dateIncomplete)}</FieldError>
+                      </div>
+                    </DateField>
+                  </div>
 
-                  <TimeField
-                    fullWidth
-                    name="time"
-                    value={time}
-                    onChange={(next) => {
-                      setTime(next)
-                      setTimeIncomplete(false)
-                    }}
-                    hourCycle={24}
-                    granularity="minute"
-                    isRequired
-                    isInvalid={timeIncomplete || undefined}
-                  >
-                    <Label>Время</Label>
-                    <TimeField.Group variant="secondary" data-field="time">
-                      <TimeField.Input>
-                        {(segment) => <TimeField.Segment segment={segment} />}
-                      </TimeField.Input>
-                    </TimeField.Group>
-                    <div className="min-h-5">
-                      <FieldError>{requiredMessage('Укажите время', timeIncomplete)}</FieldError>
-                    </div>
-                  </TimeField>
+                  <div data-field="time" className="min-w-0 flex-1">
+                    <TimeField
+                      fullWidth
+                      isDisabled={pending}
+                      name="time"
+                      value={time}
+                      onChange={(next) => {
+                        setTime(next)
+                        setTimeIncomplete(false)
+                      }}
+                      hourCycle={24}
+                      granularity="minute"
+                      isRequired
+                      isInvalid={timeIncomplete || undefined}
+                    >
+                      <Label>Время</Label>
+                      <TimeField.Group variant="secondary">
+                        <TimeField.Input>
+                          {(segment) => <TimeField.Segment segment={segment} />}
+                        </TimeField.Input>
+                      </TimeField.Group>
+                      <div className="min-h-5">
+                        <FieldError>{requiredMessage('Укажите время', timeIncomplete)}</FieldError>
+                      </div>
+                    </TimeField>
+                  </div>
                 </div>
 
                 <ParticipantsField

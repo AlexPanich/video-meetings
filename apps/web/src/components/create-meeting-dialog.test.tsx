@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { CreateMeetingDialog } from './create-meeting-dialog'
+import { Activity } from 'react'
 
 const router = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn(), replace: vi.fn() }))
 vi.mock('next/navigation', () => ({ useRouter: () => router }))
@@ -892,20 +893,54 @@ describe('CreateMeetingDialog', () => {
       expect(JSON.parse(String(init.body))).toMatchObject({ date: '2030-01-15T05:00:00.000Z' })
     })
 
-    it('после 401 «Создать» остаётся в загрузке, окно не закрывается и не отправляется снова', async () => {
+    it('после 401 окно закрывается вместе с уходом на вход и повторно не отправляется', async () => {
       fetchMock.mockResolvedValue(jsonResponse(401, { statusCode: 401, message: 'Unauthorized' }))
-      const { user, dialog } = await openDialog()
+      const { user } = await openDialog()
       await submitTitle(user, 'Планёрка')
+
       await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/login'))
-
-      const submit = within(dialog).getByRole('button', { name: /Создать/ })
-      expect(submit).toHaveAttribute('aria-disabled', 'true')
-      await user.click(titleInput())
-      await user.keyboard('{Enter}')
-      await user.keyboard('{Escape}')
-
-      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
       expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('во время запроса заблокированы все поля', async () => {
+      fetchMock.mockReturnValue(new Promise(() => {}))
+      const { user } = await openDialog()
+      await submitTitle(user, 'Планёрка')
+
+      await waitFor(() => expect(titleInput()).toBeDisabled())
+      expect(segment('Дата', 'day')).toHaveAttribute('aria-disabled', 'true')
+      expect(segment('Время', 'hour')).toHaveAttribute('aria-disabled', 'true')
+      expect(participantInput()).toBeDisabled()
+    })
+
+    it('ответ, пришедший на скрытую страницу, не переводит на встречу; окно при возврате закрыто', async () => {
+      let resolve: (response: Response) => void = () => {}
+      fetchMock.mockReturnValue(new Promise<Response>((r) => (resolve = r)))
+      const user = userEvent.setup()
+      const view = (mode: 'visible' | 'hidden') => (
+        <Activity mode={mode}>
+          <CreateMeetingDialog />
+        </Activity>
+      )
+      const { rerender } = render(view('visible'))
+      await user.click(screen.getByRole('button', { name: 'Создать встречу' }))
+      await screen.findByRole('dialog')
+      await submitTitle(user, 'Планёрка')
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+
+      // так Next 16 прячет главную при уходе «Назад» во время запроса
+      rerender(view('hidden'))
+      resolve(jsonResponse(201, created))
+      await new Promise((r) => setTimeout(r, 0))
+      rerender(view('visible'))
+
+      expect(router.push).not.toHaveBeenCalled()
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'Создать встречу' }))
+      expect(
+        within(await screen.findByRole('dialog')).getByRole('button', { name: 'Создать' }),
+      ).not.toHaveAttribute('aria-disabled', 'true')
     })
   })
 })
