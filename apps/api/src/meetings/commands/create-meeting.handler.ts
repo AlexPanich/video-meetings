@@ -1,6 +1,7 @@
 import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs'
 import { PrismaService } from '../../prisma/prisma.service.js'
 import { type PublicMeeting, toPublicMeeting } from '../meeting.js'
+import { uniqueParticipants } from '../participants.js'
 import { CreateMeetingCommand } from './create-meeting.command.js'
 
 @CommandHandler(CreateMeetingCommand)
@@ -14,7 +15,7 @@ export class CreateMeetingHandler implements ICommandHandler<CreateMeetingComman
     participants,
   }: CreateMeetingCommand): Promise<PublicMeeting> {
     const meeting = await this.prisma.meeting.create({
-      data: { ownerId, title, date, participants },
+      data: { ownerId, title, date, participants: uniqueParticipants(participants) },
     })
     return toPublicMeeting(meeting)
   }
