@@ -57,6 +57,37 @@ describe('AvatarEditor: загрузка', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  // Браузер и ОС иногда отдают для валидной картинки пустой или нестандартный MIME: решает сигнатура
+  const jpegBytes = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 0, 1])
+  it.each([
+    ['пустым', ''],
+    ['нестандартным', 'image/jpg'],
+  ])('отправляет JPEG с %s MIME-типом', async (_, type) => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { ...me, hasAvatar: true, avatarVersion: 5 }))
+    render(<AvatarEditor name={me.name} hasAvatar={false} avatarVersion={null} />)
+    await pick(new File([jpegBytes], 'me.jpg', { type }))
+
+    await waitFor(() => expect(router.refresh).toHaveBeenCalled())
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText('Допустимы только JPEG, PNG и WebP')).not.toBeInTheDocument()
+  })
+
+  it('не отправляет файл с пустым MIME и чужой сигнатурой', async () => {
+    render(<AvatarEditor name={me.name} hasAvatar={false} avatarVersion={null} />)
+    await pick(new File(['%PDF-1.7 not an image'], 'me', { type: '' }))
+
+    expect(await screen.findByText('Допустимы только JPEG, PNG и WebP')).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('выбор файла пропускает расширения картинок, а не только MIME-типы', () => {
+    render(<AvatarEditor name={me.name} hasAvatar={false} avatarVersion={null} />)
+    const accept = screen.getByLabelText('Выбрать изображение').getAttribute('accept') ?? ''
+    expect(accept.split(',')).toEqual(
+      expect.arrayContaining(['image/jpeg', '.jpg', '.png', '.webp']),
+    )
+  })
+
   it('показывает ошибку API и не меняет текущий аватар', async () => {
     fetchMock.mockResolvedValue(jsonResponse(415, { message: 'Неподдерживаемый формат' }))
     const { container } = render(<AvatarEditor name={me.name} hasAvatar avatarVersion={7} />)

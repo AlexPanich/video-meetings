@@ -4,7 +4,7 @@ import { AlertDialog, Alert, Button } from '@heroui/react'
 import { useRouter } from 'next/navigation'
 import { type ChangeEvent, useEffect, useRef, useState, useTransition } from 'react'
 import { ApiError, deleteAvatar, uploadAvatar } from '@/lib/api'
-import { AVATAR_TYPES, validateAvatarFile } from '@/lib/avatar'
+import { AVATAR_ACCEPT, validateAvatarFile } from '@/lib/avatar'
 import { UserAvatar } from './user-avatar'
 
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : 'Что-то пошло не так')
@@ -52,11 +52,15 @@ export function AvatarEditor({
     const file = input.files?.[0]
     input.value = '' // тот же файл можно выбрать повторно
     if (!file || busyRef.current) return
-    const reason = validateAvatarFile(file)
-    setError(reason)
-    if (reason) return
-
+    // ref поднимается до проверки: она асинхронная (читает сигнатуру файла)
     busyRef.current = true
+    const reason = await validateAvatarFile(file)
+    setError(reason)
+    if (reason) {
+      busyRef.current = false
+      return
+    }
+
     setUploading(true)
     try {
       await uploadAvatar(file)
@@ -136,7 +140,7 @@ export function AvatarEditor({
           type="file"
           hidden
           aria-label="Выбрать изображение"
-          accept={AVATAR_TYPES.join(',')}
+          accept={AVATAR_ACCEPT}
           onChange={onPick}
         />
       </div>
