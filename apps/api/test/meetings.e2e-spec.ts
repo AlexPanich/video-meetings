@@ -114,6 +114,24 @@ describe('Meetings (e2e)', () => {
   })
 
   describe('POST /meetings: правила названия, участников и даты', () => {
+    it.each([
+      ['без названия', { title: undefined }, ['Название должно быть строкой']],
+      ['с названием-числом', { title: 123 }, ['Название должно быть строкой']],
+      ['без участников', { participants: undefined }, ['Участники должны быть списком']],
+      ['с участниками null', { participants: null }, ['Участники должны быть списком']],
+      [
+        'без названия и участников',
+        { title: undefined, participants: undefined },
+        ['Название должно быть строкой', 'Участники должны быть списком'],
+      ],
+    ])('400 %s — по одной причине на поле', async (_title, overrides, expected) => {
+      const auth = await createUser()
+
+      const res = await createMeeting(auth, meetingBody(overrides)).expect(400)
+
+      expect([...(res.body as { message: string[] }).message].sort()).toEqual([...expected].sort())
+    })
+
     // сообщения ValidationPipe — массив строк; понятное сообщение — на русском и называет поле
     const expectMessage = (body: unknown, pattern: RegExp) => {
       const { message } = body as { message: unknown }

@@ -14,6 +14,8 @@ import {
   ApiBadRequestResponse,
   ApiBearerAuth,
   ApiCreatedResponse,
+  ApiNotFoundResponse,
+  ApiOkResponse,
   ApiOperation,
   ApiTags,
   ApiUnauthorizedResponse,
@@ -21,7 +23,7 @@ import {
 import { type AuthenticatedRequest, JwtAuthGuard } from '../auth/jwt-auth.guard.js'
 import { DeleteMeetingCommand } from './commands/delete-meeting.command.js'
 import { CreateMeetingCommand } from './commands/create-meeting.command.js'
-import { CREATE_MEETING_BAD_REQUEST, CreateMeetingDto } from './dto.js'
+import { CREATE_MEETING_BAD_REQUEST, CreateMeetingDto, PublicMeetingDto } from './dto.js'
 import { GetMeetingQuery } from './queries/get-meeting.query.js'
 import { ListMeetingsQuery } from './queries/list-meetings.query.js'
 
@@ -41,7 +43,7 @@ export class MeetingsController {
     description:
       'Название и имена участников обрезаются по краям пробелов; повторы участников без учёта регистра убираются, остаётся первое написание. Правила проверяются только при создании: встречи, созданные раньше, читаются без проверки.',
   })
-  @ApiCreatedResponse({ description: 'Созданная встреча' })
+  @ApiCreatedResponse({ description: 'Созданная встреча', type: PublicMeetingDto })
   @ApiBadRequestResponse({ description: CREATE_MEETING_BAD_REQUEST })
   @ApiUnauthorizedResponse({ description: 'Нет токена или токен недействителен' })
   create(
@@ -54,11 +56,16 @@ export class MeetingsController {
   }
 
   @Get()
+  @ApiOperation({ summary: 'Встречи текущего пользователя' })
+  @ApiOkResponse({ type: [PublicMeetingDto] })
   list(@Req() req: AuthenticatedRequest) {
     return this.queryBus.execute(new ListMeetingsQuery(req.userId))
   }
 
   @Get(':id')
+  @ApiOperation({ summary: 'Встреча по id' })
+  @ApiOkResponse({ type: PublicMeetingDto })
+  @ApiNotFoundResponse({ description: 'Встречи нет или она чужая' })
   get(@Req() req: AuthenticatedRequest, @Param('id') id: string) {
     return this.queryBus.execute(new GetMeetingQuery(req.userId, id))
   }

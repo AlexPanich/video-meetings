@@ -5,7 +5,7 @@ import request from 'supertest'
 import { App } from 'supertest/types.js'
 import { AppModule } from './../src/app.module.js'
 import { setupSwagger } from './../src/swagger.js'
-import { NAME_ALLOWED_SCHEMA_PATTERN } from './../src/users/user-name.js'
+import { NAME_ALLOWED_SCHEMA_PATTERN } from './../src/common/text-rules.js'
 
 describe('Swagger (e2e)', () => {
   let app: INestApplication<App>
@@ -63,6 +63,18 @@ describe('Swagger (e2e)', () => {
     )
     expect(operation.responses['400'].description).toMatch(/назван/i)
     expect(operation.responses).toHaveProperty('401')
+    expect(operation.responses['201'].content['application/json'].schema.$ref).toBe(
+      '#/components/schemas/PublicMeetingDto',
+    )
+    expect(res.body.components.schemas.PublicMeetingDto.properties).toEqual(
+      expect.objectContaining({
+        id: expect.any(Object),
+        title: expect.any(Object),
+        date: expect.any(Object),
+        participants: expect.any(Object),
+        ownerId: expect.any(Object),
+      }),
+    )
 
     const schema = res.body.components.schemas.CreateMeetingDto
     expect(schema.required).toEqual(expect.arrayContaining(['title', 'date', 'participants']))
