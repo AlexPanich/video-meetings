@@ -1,7 +1,7 @@
 {
-  "milestone": "Фаза 3: Ввод участников тегами (UI)",
+  "milestone": "Фаза 4: Ошибки, отмена и доступность окна (UI)",
   "maxIterations": 10,
   "maxTurns": 150,
-  "branch": "feature/meeting-create-form-phase-3",
+  "branch": "feature/meeting-create-form-phase-4",
   "prompt": "Прочитай .claude/ralph.md и следуй правилам оттуда. Возьми следующую открытую Issue из milestone '{milestone}' и реализуй его в '{branch}'"
 }
