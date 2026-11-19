@@ -1,7 +1,7 @@
 {
-  "milestone": "Фаза 7: Транскрибация аудио и видео (API)",
+  "milestone": "Фаза 1: Tracer Bullet — правила POST /meetings (API)",
   "maxIterations": 10,
   "maxTurns": 150,
-  "branch": "feature/meeting-summary-phase-7",
+  "branch": "feature/meeting-create-form-phase-1",
   "prompt": "Прочитай .claude/ralph.md и следуй правилам оттуда. Возьми следующую открытую Issue из milestone '{milestone}' и реализуй его в '{branch}'"
 }
