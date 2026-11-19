@@ -1,4 +1,4 @@
-import { ApiError, getMeetingSummary, startMeetingSummary } from './api'
+import { ApiError, createMeeting, getMeetingSummary, startMeetingSummary } from './api'
 
 const fetchMock = vi.fn()
 
@@ -64,5 +64,36 @@ describe('саммари встречи', () => {
       status: 409,
       message: 'Саммари уже генерируется',
     })
+  })
+})
+
+describe('создание встречи', () => {
+  const meeting = {
+    id: 'm1',
+    title: 'Планёрка',
+    date: '2030-01-15T10:00:00.000Z',
+    participants: [],
+    ownerId: 'u1',
+  }
+
+  it('createMeeting: POST /api/meetings с JSON-телом, возвращает встречу', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(meeting, 201))
+    const input = { title: 'Планёрка', date: '2030-01-15T10:00:00.000Z', participants: [] }
+
+    await expect(createMeeting(input)).resolves.toEqual(meeting)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/meetings')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual(input)
+  })
+
+  it('createMeeting: 400 — ApiError с причиной из API', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ message: ['Название не может быть пустым'], statusCode: 400 }, 400),
+    )
+
+    await expect(
+      createMeeting({ title: ' ', date: '2030-01-15T10:00:00.000Z', participants: [] }),
+    ).rejects.toMatchObject({ status: 400, message: 'Название не может быть пустым' })
   })
 })

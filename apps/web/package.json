@@ -15,6 +15,7 @@
     "@gravity-ui/icons": "^2.23.0",
     "@heroui/react": "^3.2.7",
     "@heroui/styles": "^3.2.7",
+    "@internationalized/date": "^3.12.4",
     "next": "16.4.2",
     "react": "19.3.0",
     "react-dom": "19.3.0",
