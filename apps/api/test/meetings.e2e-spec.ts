@@ -5,6 +5,7 @@ import { INestApplication } from '@nestjs/common'
 import request from 'supertest'
 import { App } from 'supertest/types.js'
 import { AppModule } from './../src/app.module.js'
+import { PrismaService } from './../src/prisma/prisma.service.js'
 
 const JWT_SECRET = 'e2e-test-secret-at-least-32-bytes-long'
 const PASSWORD = 'Str0ngPassw0rd!'
@@ -109,6 +110,198 @@ describe('Meetings (e2e)', () => {
       const auth = await createUser()
 
       await createMeeting(auth, meetingBody(overrides)).expect(400)
+    })
+  })
+
+  describe('POST /meetings: правила названия, участников и даты', () => {
+    it.each([
+      ['без названия', { title: undefined }, ['Название должно быть строкой']],
+      ['с названием-числом', { title: 123 }, ['Название должно быть строкой']],
+      ['без участников', { participants: undefined }, ['Участники должны быть списком']],
+      ['с участниками null', { participants: null }, ['Участники должны быть списком']],
+      [
+        'без названия и участников',
+        { title: undefined, participants: undefined },
+        ['Название должно быть строкой', 'Участники должны быть списком'],
+      ],
+    ])('400 %s — по одной причине на поле', async (_title, overrides, expected) => {
+      const auth = await createUser()
+
+      const res = await createMeeting(auth, meetingBody(overrides)).expect(400)
+
+      expect([...(res.body as { message: string[] }).message].sort()).toEqual([...expected].sort())
+    })
+
+    // сообщения ValidationPipe — массив строк; понятное сообщение — на русском и называет поле
+    const expectMessage = (body: unknown, pattern: RegExp) => {
+      const { message } = body as { message: unknown }
+      const messages: string[] = Array.isArray(message) ? message : [String(message)]
+      expect(messages.some((m) => pattern.test(m))).toBe(true)
+    }
+
+    const names = (count: number) => Array.from({ length: count }, (_, i) => `Участник ${i + 1}`)
+
+    it.each([
+      ['пустое', ''],
+      ['из одних пробелов', '   '],
+      ['из пробельных символов и табуляции', ' \t '],
+      ['длиннее 200 символов', 'а'.repeat(201)],
+      ['длиннее 200 символов после обрезки', `  ${'а'.repeat(201)}  `],
+      ['с нулевым байтом', 'План\u0000ёрка'],
+      ['с управляющим символом', 'План\u0007ёрка'],
+      ['с переводом строки внутри', 'План\nёрка'],
+      ['с DEL', 'План\u007fёрка'],
+    ])('400 с понятным сообщением, если название %s', async (_title, title) => {
+      const auth = await createUser()
+
+      const res = await createMeeting(auth, meetingBody({ title })).expect(400)
+
+      expectMessage(res.body, /назван/i)
+    })
+
+    it('принимает название ровно из 200 символов после обрезки', async () => {
+      const auth = await createUser()
+      const title = 'а'.repeat(200)
+
+      const res = await createMeeting(auth, meetingBody({ title: `  ${title}  ` })).expect(201)
+
+      expect(res.body.title).toBe(title)
+    })
+
+    it.each([
+      ['пустое', ''],
+      ['из одних пробелов', '   '],
+      ['длиннее 100 символов', 'б'.repeat(101)],
+      ['длиннее 100 символов после обрезки', ` ${'б'.repeat(101)} `],
+      ['с нулевым байтом', 'Боб\u0000'],
+      ['с управляющим символом', 'Б\u001bоб'],
+      ['с переводом строки внутри', 'Боб\nКэрол'],
+    ])('400 с понятным сообщением, если имя участника %s', async (_title, name) => {
+      const auth = await createUser()
+
+      const res = await createMeeting(auth, meetingBody({ participants: ['Алиса', name] })).expect(
+        400,
+      )
+
+      expectMessage(res.body, /участник/i)
+    })
+
+    it('принимает имя участника ровно из 100 символов после обрезки', async () => {
+      const auth = await createUser()
+      const name = 'б'.repeat(100)
+
+      const res = await createMeeting(auth, meetingBody({ participants: [` ${name} `] })).expect(
+        201,
+      )
+
+      expect(res.body.participants).toEqual([name])
+    })
+
+    it('400 с понятным сообщением для 51 участника', async () => {
+      const auth = await createUser()
+
+      const res = await createMeeting(auth, meetingBody({ participants: names(51) })).expect(400)
+
+      expectMessage(res.body, /участник/i)
+    })
+
+    it('принимает 50 участников', async () => {
+      const auth = await createUser()
+
+      const res = await createMeeting(auth, meetingBody({ participants: names(50) })).expect(201)
+
+      expect(res.body.participants).toEqual(names(50))
+    })
+
+    it.each([
+      ['отсутствует', undefined],
+      ['null', null],
+      ['пустая строка', ''],
+      ['не дата', 'not-a-date'],
+      ['в формате ДД.ММ.ГГГГ', '15.01.2030'],
+      ['в формате ММ/ДД/ГГГГ', '01/15/2030'],
+      ['число (timestamp)', 1894701600000],
+      ['строка с timestamp', '1894701600000'],
+      ['несуществующий день', '2030-02-30T10:00:00.000Z'],
+    ])('400 с понятным сообщением, если дата %s', async (_title, date) => {
+      const auth = await createUser()
+
+      const res = await createMeeting(auth, meetingBody({ date })).expect(400)
+
+      expectMessage(res.body, /дат/i)
+    })
+
+    it.each([
+      ['прошедшую', '2000-01-01T00:00:00.000Z'],
+      ['будущую', '2099-12-31T23:00:00.000Z'],
+    ])('принимает %s дату', async (_title, date) => {
+      const auth = await createUser()
+
+      const res = await createMeeting(auth, meetingBody({ date })).expect(201)
+
+      expect(res.body.date).toBe(date)
+    })
+
+    it('принимает дату ISO 8601 со смещением часового пояса и хранит её в UTC', async () => {
+      const auth = await createUser()
+
+      const res = await createMeeting(
+        auth,
+        meetingBody({ date: '2030-01-15T15:00:00+03:00' }),
+      ).expect(201)
+
+      expect(res.body.date).toBe('2030-01-15T12:00:00.000Z')
+    })
+
+    it('обрезает пробелы по краям названия и имён, убирает повторы участников без учёта регистра', async () => {
+      const auth = await createUser()
+      const { body: created } = await createMeeting(
+        auth,
+        meetingBody({
+          title: '  Планёрка команды \t',
+          participants: [' Алиса ', 'Боб', 'алиса', '  БОБ', 'Кэрол', 'АЛИСА  '],
+        }),
+      ).expect(201)
+
+      const res = await http().get(`/meetings/${created.id}`).set('Authorization', auth).expect(200)
+
+      expect(res.body.title).toBe('Планёрка команды')
+      // сохраняется первое написание, порядок — по первому вхождению
+      expect(res.body.participants).toEqual(['Алиса', 'Боб', 'Кэрол'])
+    })
+
+    it('встреча без участников создаётся с пустым списком', async () => {
+      const auth = await createUser()
+      const { body: created } = await createMeeting(auth, meetingBody({ participants: [] })).expect(
+        201,
+      )
+
+      const res = await http().get(`/meetings/${created.id}`).set('Authorization', auth).expect(200)
+
+      expect(res.body.participants).toEqual([])
+    })
+
+    it('встреча, записанная в БД в обход правил, отдаётся GET /meetings и GET /meetings/:id', async () => {
+      const auth = await createUser()
+      const me = await http().get('/auth/me').set('Authorization', auth).expect(200)
+      const legacy = {
+        title: `  ${'x'.repeat(300)}\u0007  `,
+        participants: ['', '   ', 'Боб', 'боб', 'б'.repeat(150), 'Кэ\nрол', ...names(60)],
+      }
+      const stored = await app.get(PrismaService).meeting.create({
+        data: { ...legacy, date: new Date('2020-05-01T09:00:00.000Z'), ownerId: me.body.id },
+      })
+
+      const list = await http().get('/meetings').set('Authorization', auth).expect(200)
+      expect(list.body).toHaveLength(1)
+      expect(list.body[0]).toMatchObject({ id: stored.id, ...legacy })
+
+      const one = await http().get(`/meetings/${stored.id}`).set('Authorization', auth).expect(200)
+      expect(one.body).toMatchObject({
+        id: stored.id,
+        ...legacy,
+        date: '2020-05-01T09:00:00.000Z',
+      })
     })
   })
 
