@@ -9,9 +9,9 @@ import { AppModule } from './../src/app.module.js'
 import { PrismaService } from './../src/prisma/prisma.service.js'
 import {
   installLlmMock,
-  readAllFilesReply,
   SAMPLE_SUMMARY,
-  toolResultsText,
+  summaryReply,
+  userMessagesText,
   type LlmMock,
 } from './support/llm-mock.js'
 import {
@@ -115,7 +115,7 @@ describe('Transcription for meeting summary (e2e)', { timeout: 20_000 }, () => {
   })
 
   beforeEach(() => {
-    llm.setFallback(readAllFilesReply())
+    llm.setFallback(summaryReply())
     whisper.setFallback(transcriptReply(TRANSCRIPT))
   })
 
@@ -149,9 +149,9 @@ describe('Transcription for meeting summary (e2e)', { timeout: 20_000 }, () => {
     expect(sent[0].file?.equals(AUDIO)).toBe(true)
     expect(sent[0].mimeType).toBe('audio/mpeg')
 
-    // модель прочитала транскрипт через инструменты, а не байты аудио
-    const seen = toolResultsText(llm.requests.slice(llmBefore))
-    expect(seen).toContain(audioId)
+    // модель получила транскрипт в блоке материалов, а не байты аудио
+    const seen = userMessagesText(llm.requests.slice(llmBefore))
+    expect(seen).toContain('<material file="call.mp3" transcript="true"')
     expect(seen).toContain(TRANSCRIPT)
     expect(await transcripts(audioId)).toBe(1)
   })
@@ -160,7 +160,7 @@ describe('Transcription for meeting summary (e2e)', { timeout: 20_000 }, () => {
     const auth = await createUser()
     const meetingId = await createMeeting(auth)
     await upload(auth, meetingId, Buffer.from('Повестка: демо.'), 'agenda.txt', 'text/plain')
-    const videoId = await upload(auth, meetingId, VIDEO, 'call.mp4', 'video/mp4')
+    await upload(auth, meetingId, VIDEO, 'call.mp4', 'video/mp4')
     const whisperBefore = whisper.requests.length
     const llmBefore = llm.requests.length
 
@@ -171,8 +171,8 @@ describe('Transcription for meeting summary (e2e)', { timeout: 20_000 }, () => {
     const sent = whisper.requests.slice(whisperBefore)
     expect(sent).toHaveLength(1)
     expect(sent[0].file?.equals(VIDEO)).toBe(true)
-    const seen = toolResultsText(llm.requests.slice(llmBefore))
-    expect(seen).toContain(videoId)
+    const seen = userMessagesText(llm.requests.slice(llmBefore))
+    expect(seen).toContain('<material file="call.mp4" transcript="true"')
     expect(seen).toContain(TRANSCRIPT)
     expect(seen).toContain('Повестка: демо.')
   })
@@ -192,7 +192,7 @@ describe('Transcription for meeting summary (e2e)', { timeout: 20_000 }, () => {
 
     expect(done.error).toBeNull()
     expect(whisper.requests.length).toBe(whisperBefore)
-    expect(toolResultsText(llm.requests.slice(llmBefore))).toContain(TRANSCRIPT)
+    expect(userMessagesText(llm.requests.slice(llmBefore))).toContain(TRANSCRIPT)
   })
 
   it('новый файл встречи транскрибируется, уже готовые — нет', async () => {

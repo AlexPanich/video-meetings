@@ -49,6 +49,37 @@ describe('ContextBudget.fit', () => {
     expect(budget.estimate(fitted.messages)).toBeLessThanOrEqual(budget.inputTokens)
   })
 
+  it('currentTurn: повтор внутри хода не делает его начало «старым ходом»', () => {
+    const budget = new ContextBudget(2048, [])
+    // текущий ход: сообщение с материалами, ответ модели и повтор по схеме — тоже `user`
+    const messages: OllamaMessage[] = [
+      user('m'.repeat(6000)),
+      { role: 'assistant', content: 'не JSON' },
+      user('Respond again with only a JSON value'),
+    ]
+
+    // без currentTurn повтор — «последний ход», а материалы убираются как прежние
+    expect(budget.fit(messages).messages[0].content).toMatch(/earlier messages .* omitted/)
+    // с началом хода материалы не убираются: не помещается — ошибка, а не ответ без материалов
+    expect(() => budget.fit(messages, 0)).toThrow(ContextOverflowError)
+  })
+
+  it('currentTurn: прежние ходы до начала текущего по-прежнему убираются', () => {
+    const budget = new ContextBudget(2048, [])
+    const messages: OllamaMessage[] = [
+      user('o'.repeat(6000)),
+      { role: 'assistant', content: 'старый ответ' },
+      user('Текущий вопрос'),
+      { role: 'assistant', content: 'не JSON' },
+      user('Respond again'),
+    ]
+
+    const fitted = budget.fit(messages, 2)
+
+    expect(fitted.messages[0].content).toMatch(/2 earlier messages .* omitted/)
+    expect(fitted.messages.slice(1)).toEqual(messages.slice(2))
+  })
+
   it('сообщение пользователя больше бюджета — ContextOverflowError', () => {
     const budget = new ContextBudget(2048, [])
     expect(() => budget.fit([user('x'.repeat(10_000))])).toThrow(ContextOverflowError)

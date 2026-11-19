@@ -1,6 +1,6 @@
 // Тесты фазы 3: `outputFormat: { type: 'json_schema', schema }` → `structured_output` с проверкой
 // по схеме и ограниченными повторами. Транспорт Ollama — мок-`fetch`.
-import { createSdkMcpServer, query, tool } from './index.js'
+import { contextLimits, createSdkMcpServer, query, tool } from './index.js'
 import type { Options } from './index.js'
 import {
   collect,
@@ -219,6 +219,27 @@ describe('outputFormat: проверка по схеме и повторы', () 
     expect(result.errors.join('\n')).toMatch(/schema|схем/i)
     expect(result).not.toHaveProperty('structured_output')
     expect(result.num_turns).toBe(MAX_ATTEMPTS)
+  })
+
+  it('повтор, который не помещается, — Context window exceeded, а не запрос без исходного сообщения', async () => {
+    vi.stubEnv('OLLAMA_NUM_CTX', '8192')
+    const { inputTokens } = contextLimits()
+    // вход первого запроса — ровно на границе окна: после калибровки повтор (исходное сообщение,
+    // ответ и просьба повторить) в оценку уже не помещается
+    const fetchMock = scriptedOllama(
+      ollamaReply('не JSON', { prompt_eval_count: inputTokens }),
+      ollamaReply(JSON.stringify(VALID)),
+    )
+    const prompt = 'Материалы встречи. '.repeat(Math.floor((inputTokens * 1.5) / 19))
+
+    const messages = await collect(query({ prompt, options: structuredOptions() }))
+
+    // повтор без исходного сообщения не отправлен: модель ответила бы, не видя материалов
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const result = lastResult(messages)
+    expect(result.subtype).toBe('error_during_execution')
+    if (result.subtype === 'success') return
+    expect(result.errors.join('\n')).toMatch(/Context window exceeded/)
   })
 
   it('каждая попытка отдаётся сообщением assistant', async () => {

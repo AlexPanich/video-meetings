@@ -103,7 +103,12 @@ export class ContextBudget {
    *    `ContextOverflowError`: иначе Ollama молча отбросила бы часть входа.
    * История сессии не меняется.
    */
-  fit(messages: OllamaMessage[]): FittedRequest {
+  /**
+   * `currentTurn` — индекс сообщения пользователя, с которого начался текущий ход (по умолчанию —
+   * последнее сообщение пользователя). Всё начиная с него не убирается: повтор ответа по схеме —
+   * тоже сообщение `user`, но это продолжение хода, а не новый ход.
+   */
+  fit(messages: OllamaMessage[], currentTurn?: number): FittedRequest {
     const estimated = this.estimate(messages)
     if (estimated <= this.inputTokens) return this.request(messages, estimated)
     const fitted = this.fitTools(messages)
@@ -111,7 +116,7 @@ export class ContextBudget {
 
     // Шаг 4: прежние ходы диалога, от старых к новым. Без них вход только меньше, поэтому
     // ищем минимальное число убранных ходов бинарным поиском, как и для обменов инструментов.
-    const turns = turnStarts(messages)
+    const turns = turnStarts(messages, currentTurn)
     const attempt = (dropped: number) => this.fitTools(dropTurns(messages, turns, dropped))
     const maxDropped = turns.length - 1
     if (maxDropped > 0 && attempt(maxDropped)) {
@@ -265,9 +270,10 @@ function collapseExchanges(messages: OllamaMessage[], removed: Exchange[]): Olla
 }
 
 /** Индексы сообщений пользователя (начала ходов) после системного промпта. */
-function turnStarts(messages: OllamaMessage[]): number[] {
+function turnStarts(messages: OllamaMessage[], currentTurn = Infinity): number[] {
   const starts: number[] = []
   for (const [index, message] of messages.entries()) {
+    if (index > currentTurn) break
     if (message.role === 'user') starts.push(index)
   }
   return starts

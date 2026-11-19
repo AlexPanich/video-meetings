@@ -298,7 +298,7 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
     const requestStartedAt = performance.now()
     let fitted
     try {
-      fitted = session.context.fit(session.history)
+      fitted = session.context.fit(session.history, turnStart)
     } catch (error) {
       if (!(error instanceof ContextOverflowError)) throw error
       // Запрос не отправляется: Ollama молча отбросила бы часть входа. Ход не сохраняется и
