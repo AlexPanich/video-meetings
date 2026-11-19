@@ -33,9 +33,15 @@ type FieldErrorRender = Extract<
   (v: never) => unknown
 >
 const requiredMessage =
-  (message: string): FieldErrorRender =>
+  (message: string, incomplete: boolean): FieldErrorRender =>
   ({ validationDetails, validationErrors }) =>
-    validationDetails.valueMissing ? message : validationErrors.join(' ')
+    incomplete || validationDetails.valueMissing ? message : validationErrors.join(' ')
+
+// Частично стёртое поле даты или времени: React Aria держит неполный ввод только в отображении,
+// `onChange` не вызывает и оставляет прежнее значение (null — лишь когда стёрты все сегменты).
+// Пустой сегмент помечается `data-placeholder`
+const hasEmptySegment = (form: HTMLFormElement, field: 'date' | 'time') =>
+  form.querySelector(`[data-field="${field}"] [data-placeholder]`) !== null
 
 // Окно создания встречи с кнопкой «Создать встречу»: название, дата и время по времени браузера,
 // участники тегами; в API уходит момент в UTC и участники (вместе с невписанным в тег именем),
@@ -45,13 +51,20 @@ export function CreateMeetingDialog() {
   const [isOpen, setIsOpen] = useState(false)
   const [date, setDate] = useState<CalendarDate | null>(null)
   const [time, setTime] = useState<Time | null>(null)
+  const [dateIncomplete, setDateIncomplete] = useState(false)
+  const [timeIncomplete, setTimeIncomplete] = useState(false)
   const [participants, setParticipants] = useState<string[]>([])
   const [participantInput, setParticipantInput] = useState('')
   const [participantError, setParticipantError] = useState<string | null>(null)
   // причины ошибки API: у 400 валидации их несколько, по одной на поле
   const [error, setError] = useState<string[] | null>(null)
-  // pending держится до конца перехода на страницу встречи; ref отсекает повторную отправку сразу
-  const [pending, startTransition] = useTransition()
+  // Запрос — обычное состояние, а не async-переход: React 19 связывает все незавершённые
+  // async-переходы, и чужой зависший запрос держал бы «Создать» в загрузке и после ошибки.
+  // Переход на страницу встречи — синхронный startTransition, его pending держит загрузку до конца
+  // перехода; ref отсекает повторную отправку сразу, до перерисовки
+  const [requesting, setRequesting] = useState(false)
+  const [navigating, startTransition] = useTransition()
+  const pending = requesting || navigating
   const submitting = useRef(false)
 
   // Значения по умолчанию считаются при каждом открытии: окно могли открыть через час после загрузки
@@ -59,6 +72,12 @@ export function CreateMeetingDialog() {
     const start = defaultMeetingStart()
     setDate(parseDate(start.date))
     setTime(parseTime(start.time))
+    setDateIncomplete(false)
+    setTimeIncomplete(false)
+    // после 401 загрузка остаётся до ухода на вход; Next 16 скрывает главную, а не размонтирует,
+    // поэтому при возврате окно открывается уже без неё (закрытое окно запросов не ведёт)
+    setRequesting(false)
+    submitting.current = false
     setParticipants([])
     setParticipantInput('')
     setParticipantError(null)
@@ -67,17 +86,32 @@ export function CreateMeetingDialog() {
   }
 
   const onOpenChange = (next: boolean) => {
-    // во время запроса окно не закрывается
-    if (!next && submitting.current) return
+    // во время запроса и перехода на страницу встречи окно не закрывается
+    if (!next && (submitting.current || pending)) return
     setIsOpen(next)
+  }
+
+  // Флаг неполного ввода снимается не только в onChange: дозаполненный сегмент с прежним значением
+  // onChange не вызывает, а поле с `isInvalid` браузер не даёт отправить, и onSubmit не перепроверит
+  const recheckSegments = (event: SyntheticEvent<HTMLElement>) => {
+    const form = event.currentTarget.closest('form')
+    if (!form) return
+    if (dateIncomplete) setDateIncomplete(hasEmptySegment(form, 'date'))
+    if (timeIncomplete) setTimeIncomplete(hasEmptySegment(form, 'time'))
   }
 
   const onSubmit = (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (submitting.current || !date || !time) return
-    const title = String(new FormData(event.currentTarget).get('title'))
+    if (submitting.current || pending || !date || !time) return
+    const form = event.currentTarget
+    const title = String(new FormData(form).get('title'))
+    const incompleteDate = hasEmptySegment(form, 'date')
+    const incompleteTime = hasEmptySegment(form, 'time')
+    setDateIncomplete(incompleteDate)
+    setTimeIncomplete(incompleteTime)
     // поле уже не пускает отправку с ошибкой; проверка здесь — страховка, чтобы запрос не ушёл
     if (validateMeetingTitle(title)) return
+    if (incompleteDate || incompleteTime) return
     // Невписанный в тег ввод тоже уходит в участники и становится тегами: так при ошибке API видно,
     // что отправлено. В нём могут остаться запятые (после ошибки при вставке списка) — режем так же,
     // как поле; повтор уже добавленного просто не дублируется, некорректное имя блокирует отправку
@@ -97,8 +131,9 @@ export function CreateMeetingDialog() {
     // `CalendarDate` — `YYYY-MM-DD`, `Time` — `HH:MM:SS`
     const startsAt = localDateTimeToIso(date.toString(), time.toString())
     submitting.current = true
+    setRequesting(true)
     setError(null)
-    startTransition(async () => {
+    void (async () => {
       try {
         const meeting = await createMeeting({
           title: title.trim(),
@@ -109,8 +144,8 @@ export function CreateMeetingDialog() {
         if (typeof meeting?.id !== 'string' || !meeting.id) {
           throw new ApiError('Что-то пошло не так', 0)
         }
-        // Обновления после await в React 19 не входят в переход сами: без вложенного
-        // startTransition окно закрылось бы раньше, чем откроется страница встречи
+        // Закрытие окна и снятие загрузки — в том же переходе, что и навигация: иначе окно
+        // закрылось бы раньше, чем откроется страница встречи
         startTransition(() => {
           router.push(`/meetings/${encodeURIComponent(meeting.id)}`)
           // Next 16 скрывает главную, а не размонтирует, и при возврате показал бы её прежние
@@ -119,21 +154,25 @@ export function CreateMeetingDialog() {
           // текущей: главная перезапросит счётчик и «Последние встречи»
           router.refresh()
           setIsOpen(false)
+          setRequesting(false)
         })
         submitting.current = false
       } catch (e) {
-        submitting.current = false
         if (e instanceof ApiError && e.status === 401) {
+          // загрузка и ref остаются до ухода на вход: форму с истёкшей сессией повторно
+          // не отправить и окно не закрыть; снимает их следующее открытие окна
           router.replace('/login')
           return
         }
+        submitting.current = false
+        setRequesting(false)
         setError(
           e instanceof ApiError
             ? e.messages
             : [e instanceof Error ? e.message : 'Что-то пошло не так'],
         )
       }
-    })
+    })()
   }
 
   return (
@@ -181,23 +220,31 @@ export function CreateMeetingDialog() {
                   </div>
                 </TextField>
 
-                <div className="flex items-start gap-3">
+                <div
+                  className="flex items-start gap-3"
+                  onKeyUp={recheckSegments}
+                  onBlur={recheckSegments}
+                >
                   <DateField
                     fullWidth
                     name="date"
                     value={date}
-                    onChange={setDate}
+                    onChange={(next) => {
+                      setDate(next)
+                      setDateIncomplete(false)
+                    }}
                     granularity="day"
                     isRequired
+                    isInvalid={dateIncomplete || undefined}
                   >
                     <Label>Дата</Label>
-                    <DateField.Group variant="secondary">
+                    <DateField.Group variant="secondary" data-field="date">
                       <DateField.Input>
                         {(segment) => <DateField.Segment segment={segment} />}
                       </DateField.Input>
                     </DateField.Group>
                     <div className="min-h-5">
-                      <FieldError>{requiredMessage('Укажите дату')}</FieldError>
+                      <FieldError>{requiredMessage('Укажите дату', dateIncomplete)}</FieldError>
                     </div>
                   </DateField>
 
@@ -205,19 +252,23 @@ export function CreateMeetingDialog() {
                     fullWidth
                     name="time"
                     value={time}
-                    onChange={setTime}
+                    onChange={(next) => {
+                      setTime(next)
+                      setTimeIncomplete(false)
+                    }}
                     hourCycle={24}
                     granularity="minute"
                     isRequired
+                    isInvalid={timeIncomplete || undefined}
                   >
                     <Label>Время</Label>
-                    <TimeField.Group variant="secondary">
+                    <TimeField.Group variant="secondary" data-field="time">
                       <TimeField.Input>
                         {(segment) => <TimeField.Segment segment={segment} />}
                       </TimeField.Input>
                     </TimeField.Group>
                     <div className="min-h-5">
-                      <FieldError>{requiredMessage('Укажите время')}</FieldError>
+                      <FieldError>{requiredMessage('Укажите время', timeIncomplete)}</FieldError>
                     </div>
                   </TimeField>
                 </div>

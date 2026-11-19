@@ -869,5 +869,43 @@ describe('CreateMeetingDialog', () => {
       const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
       expect(JSON.parse(String(init.body))).toMatchObject({ date: '2030-01-15T05:30:00.000Z' })
     })
+
+    it('стёртый сегмент, дозаполненный прежним значением, снимает ошибку и отправляется', async () => {
+      setNow(new Date(2030, 0, 15, 9, 10))
+      fetchMock.mockResolvedValue(jsonResponse(201, created))
+      const { user, dialog } = await openDialog()
+      await user.click(segment('Время', 'minute'))
+      await user.keyboard('{Backspace}{Backspace}')
+      await submitTitle(user, 'Планёрка')
+      await within(dialog).findByText('Укажите время')
+
+      // значение то же (10:00): onChange не вызывается, ошибку снимает перепроверка сегментов
+      await user.click(segment('Время', 'minute'))
+      await user.keyboard('00')
+      await waitFor(() =>
+        expect(within(dialog).queryByText('Укажите время')).not.toBeInTheDocument(),
+      )
+      await user.click(screen.getByRole('button', { name: 'Создать' }))
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(JSON.parse(String(init.body))).toMatchObject({ date: '2030-01-15T05:00:00.000Z' })
+    })
+
+    it('после 401 «Создать» остаётся в загрузке, окно не закрывается и не отправляется снова', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(401, { statusCode: 401, message: 'Unauthorized' }))
+      const { user, dialog } = await openDialog()
+      await submitTitle(user, 'Планёрка')
+      await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/login'))
+
+      const submit = within(dialog).getByRole('button', { name: /Создать/ })
+      expect(submit).toHaveAttribute('aria-disabled', 'true')
+      await user.click(titleInput())
+      await user.keyboard('{Enter}')
+      await user.keyboard('{Escape}')
+
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
   })
 })
