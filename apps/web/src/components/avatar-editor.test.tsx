@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AvatarEditor } from './avatar-editor'
 
@@ -11,6 +11,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock)
   fetchMock.mockReset()
   router.refresh.mockReset()
+  router.refresh.mockReturnValue(undefined)
   router.replace.mockReset()
 })
 
@@ -194,5 +195,82 @@ describe('AvatarEditor: доступность', () => {
     await pick(new File(['x'], 'doc.pdf', { type: 'application/pdf' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Допустимы только JPEG, PNG и WebP')
+  })
+})
+
+describe('AvatarEditor: фокус и индикатор после изменений', () => {
+  // router.refresh() возвращает промис: переход (и pending) длится, пока он не разрешится
+  let finishRefresh = () => {}
+  const holdRefresh = () => {
+    router.refresh.mockReturnValue(new Promise<void>((resolve) => (finishRefresh = resolve)))
+  }
+  // незавершённый async-переход React 19 связал бы с переходами следующих тестов
+  afterEach(async () => {
+    await act(async () => finishRefresh())
+  })
+
+  it('после удаления возвращает фокус с <body> на «Загрузить фото»', async () => {
+    const { rerender } = render(<AvatarEditor name={me.name} hasAvatar avatarVersion={1} />)
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    expect(document.activeElement).toBe(document.body)
+
+    rerender(<AvatarEditor name={me.name} hasAvatar={false} avatarVersion={null} />)
+
+    const upload = screen.getByRole('button', { name: 'Загрузить фото' })
+    await waitFor(() => expect(upload).toHaveFocus(), { timeout: 1000 })
+  })
+
+  it('не перехватывает фокус, если он уже на другом элементе', async () => {
+    const Page = ({ hasAvatar }: { hasAvatar: boolean }) => (
+      <>
+        <button type="button">Другое</button>
+        <AvatarEditor name={me.name} hasAvatar={hasAvatar} avatarVersion={hasAvatar ? 1 : null} />
+      </>
+    )
+    const { rerender } = render(<Page hasAvatar />)
+    const other = screen.getByRole('button', { name: 'Другое' })
+    other.focus()
+
+    rerender(<Page hasAvatar={false} />)
+    await new Promise((resolve) => setTimeout(resolve, 400))
+
+    expect(other).toHaveFocus()
+  })
+
+  it('держит pending до конца перехода и не шлёт второй запрос', async () => {
+    holdRefresh()
+    fetchMock.mockResolvedValue(jsonResponse(200, { ...me, hasAvatar: true, avatarVersion: 5 }))
+    render(<AvatarEditor name={me.name} hasAvatar avatarVersion={1} />)
+
+    await pick(png())
+    await waitFor(() => expect(router.refresh).toHaveBeenCalled())
+
+    const replace = screen.getByRole('button', { name: 'Заменить' })
+    expect(replace).toHaveAttribute('data-pending', 'true')
+    expect(screen.getByRole('button', { name: 'Удалить аватар' })).toBeDisabled()
+
+    await pick(png())
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(replace).toHaveAttribute('data-pending', 'true')
+
+    await act(async () => finishRefresh())
+    await waitFor(() => expect(replace).not.toHaveAttribute('data-pending'))
+  })
+
+  it('держит pending после удаления до конца перехода', async () => {
+    holdRefresh()
+    fetchMock.mockResolvedValue({ ok: true, status: 204 } as Response)
+    render(<AvatarEditor name={me.name} hasAvatar avatarVersion={1} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Удалить аватар' }))
+    const dialog = await screen.findByRole('alertdialog')
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Удалить' }))
+
+    await waitFor(() => expect(router.refresh).toHaveBeenCalled())
+    const replace = screen.getByRole('button', { name: 'Заменить' })
+    expect(replace).toHaveAttribute('data-pending', 'true')
+
+    await act(async () => finishRefresh())
+    await waitFor(() => expect(replace).not.toHaveAttribute('data-pending'))
   })
 })
