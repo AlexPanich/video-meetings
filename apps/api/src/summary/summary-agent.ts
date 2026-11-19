@@ -270,6 +270,9 @@ async function structuredQuery(
 const chunkLimitBytes = (budget: number) =>
   Math.max(MIN_CHUNK_BYTES, budget - MATERIAL_HEADER_RESERVE_BYTES)
 
+// оба инструмента только читают: несколько вызовов из одного ответа модели SDK выполняет параллельно
+const READ_ONLY = { annotations: { readOnlyHint: true } }
+
 @Injectable()
 export class SummaryAgent {
   constructor(private readonly prisma: PrismaService) {}
@@ -515,6 +518,7 @@ export class SummaryAgent {
             ),
           ),
         ),
+      READ_ONLY,
     )
     const readFile = tool(
       READ_FILE,
@@ -555,6 +559,7 @@ export class SummaryAgent {
           return textResult({ error: 'Не удалось прочитать файл' }, true)
         }
       },
+      READ_ONLY,
     )
     return createSdkMcpServer({ name: SERVER_NAME, version: '1.0.0', tools: [listFiles, readFile] })
   }

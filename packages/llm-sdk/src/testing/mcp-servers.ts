@@ -29,6 +29,7 @@ export interface TestMcpServer {
 /**
  * MCP-сервер с инструментами `echo` и `fail`, как у stdio-фикстуры (без её переменных окружения
  * и `get_secret`: вызовы видны в `calls`, а не в файле). Меняете ответы — меняйте и фикстуру.
+ * Только здесь — `wait` (`readOnlyHint: true`): ждёт `ms` и отвечает `waited <ms>`.
  */
 function echoServer(calls: string[]): McpServer {
   const server = new McpServer({ name: 'echo-fixture', version: '1.0.0' })
@@ -38,6 +39,18 @@ function echoServer(calls: string[]): McpServer {
     async ({ text }) => {
       calls.push(text)
       return { content: [{ type: 'text', text: `echo: ${text}` }] }
+    },
+  )
+  server.registerTool(
+    'wait',
+    {
+      description: 'Ждёт ms миллисекунд',
+      inputSchema: { ms: z.number() },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ ms }) => {
+      await new Promise((resolve) => setTimeout(resolve, ms))
+      return { content: [{ type: 'text', text: `waited ${ms}` }] }
     },
   )
   server.registerTool('fail', { description: 'Всегда возвращает ошибку' }, async () => ({

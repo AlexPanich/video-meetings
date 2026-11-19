@@ -438,6 +438,36 @@ describe.each([
     expect(resultText(toolResults(messages)[0])).toBe('echo: привет')
   })
 
+  it('инструменты с readOnlyHint из одного ответа выполняются параллельно', async () => {
+    const WAIT = 'mcp__echo__wait'
+    const DELAY_MS = 150
+    scriptedOllama(
+      toolCallReply(
+        { name: WAIT, arguments: { ms: DELAY_MS } },
+        { name: WAIT, arguments: { ms: DELAY_MS } },
+      ),
+      ollamaReply('Готово'),
+    )
+    const messages: SDKMessage[] = []
+    let first = 0
+    let toolsDone = 0
+    for await (const message of query({
+      prompt: 'Подожди',
+      options: { mcpServers: { echo: { type, url: server.url } }, allowedTools: [WAIT] },
+    })) {
+      messages.push(message)
+      // Время только обработчиков: от ответа модели до сообщения с результатами.
+      if (message.type === 'assistant') first = performance.now()
+      if (message.type === 'user') toolsDone = performance.now()
+    }
+
+    expect(toolResults(messages).map(resultText)).toEqual([
+      `waited ${DELAY_MS}`,
+      `waited ${DELAY_MS}`,
+    ])
+    expect(toolsDone - first).toBeLessThan(DELAY_MS * 1.8)
+  })
+
   it('заголовки из конфига уходят серверу', async () => {
     await runEcho({
       mcpServers: {
