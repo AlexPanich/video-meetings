@@ -10,7 +10,8 @@ export const NAME_MAX_LENGTH = 100
 // в text) и bidi-управляющие (U+202E и др. меняют порядок отображения: `abc\u202Egnp.exe`).
 // ZWJ не запрещаем: он нужен составным эмодзи и некоторым письменностям.
 // Тот же набор — в `validateName` на вебе (`apps/web/src/lib/profile-name.ts`).
-const NAME_ALLOWED_PATTERN = '^[^\\p{Cc}\\p{Bidi_Control}]*$'
+// Тот же набор — у названия встречи и имён участников (`apps/api/src/meetings/dto.ts`).
+export const NAME_ALLOWED_PATTERN = '^[^\\p{Cc}\\p{Bidi_Control}]*$'
 
 // Общие правила имени для регистрации и смены имени: trim, не пустое, ≤ 100 символов,
 // без управляющих и bidi-символов и с хотя бы одной буквой или цифрой
