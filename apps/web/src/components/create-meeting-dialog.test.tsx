@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { CreateMeetingDialog } from './create-meeting-dialog'
+import { Activity } from 'react'
 
 const router = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn(), replace: vi.fn() }))
 vi.mock('next/navigation', () => ({ useRouter: () => router }))
@@ -541,6 +542,405 @@ describe('CreateMeetingDialog', () => {
 
       expect(tags()).toEqual([])
       expect(participantInput()).toHaveValue('')
+    })
+  })
+
+  describe('ошибки, отмена и доступность', () => {
+    const titleInput = () => screen.getByRole('textbox', { name: 'Название' })
+
+    // Заполняет форму не значениями по умолчанию: так видно, что после ошибки ничего не потерялось
+    const fillForm = async (user: ReturnType<typeof userEvent.setup>) => {
+      await user.click(segment('Дата', 'day'))
+      await user.keyboard('20')
+      await user.click(segment('Время', 'hour'))
+      await user.keyboard('18')
+      await user.type(participantInput(), 'Анна{Enter}')
+      await submitTitle(user, 'Планёрка')
+    }
+
+    const expectFormKept = () => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(titleInput()).toHaveValue('Планёрка')
+      expect(segment('Дата', 'day')).toHaveAttribute('aria-valuenow', '20')
+      expect(segment('Время', 'hour')).toHaveAttribute('aria-valuenow', '18')
+      expect(tags()).toEqual(['Анна'])
+    }
+
+    it.each([
+      [
+        '403',
+        () => jsonResponse(403, { statusCode: 403, message: 'Доступ запрещён' }),
+        'Доступ запрещён',
+      ],
+      ['404', () => jsonResponse(404, { statusCode: 404, message: 'Не найдено' }), 'Не найдено'],
+      ['500 без тела', () => jsonResponse(500, null), 'Что-то пошло не так'],
+      [
+        '503',
+        () => jsonResponse(503, { statusCode: 503, message: 'Сервис недоступен' }),
+        'Сервис недоступен',
+      ],
+    ])(
+      'ошибка %s: окно остаётся, данные сохраняются, показано сообщение',
+      async (_, response, message) => {
+        setNow(new Date(2030, 0, 15, 9, 10))
+        fetchMock.mockResolvedValue(response())
+        const { user, dialog } = await openDialog()
+
+        await fillForm(user)
+
+        expect(await within(dialog).findByRole('alert')).toHaveTextContent(message)
+        expectFormKept()
+        expect(router.push).not.toHaveBeenCalled()
+        expect(router.replace).not.toHaveBeenCalled()
+      },
+    )
+
+    it('сеть недоступна: окно остаётся, данные сохраняются, показано сообщение', async () => {
+      setNow(new Date(2030, 0, 15, 9, 10))
+      fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
+      const { user, dialog } = await openDialog()
+
+      await fillForm(user)
+
+      expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+        'Не удалось связаться с сервером',
+      )
+      expectFormKept()
+    })
+
+    it('400: показывается причина из API, данные сохраняются', async () => {
+      setNow(new Date(2030, 0, 15, 9, 10))
+      fetchMock.mockResolvedValue(
+        jsonResponse(400, {
+          statusCode: 400,
+          message: ['Дата встречи должна быть в формате ISO 8601'],
+        }),
+      )
+      const { user, dialog } = await openDialog()
+
+      await fillForm(user)
+
+      expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+        'Дата встречи должна быть в формате ISO 8601',
+      )
+      expectFormKept()
+    })
+
+    it('после ошибки повторная отправка уходит и снимает сообщение', async () => {
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse(500, null))
+        .mockResolvedValueOnce(jsonResponse(201, created))
+      const { user, dialog } = await openDialog()
+      await submitTitle(user, 'Планёрка')
+      await within(dialog).findByRole('alert')
+
+      await user.click(screen.getByRole('button', { name: 'Создать' }))
+
+      await waitFor(() => expect(router.push).toHaveBeenCalledWith('/meetings/m1'))
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument()
+    })
+
+    it('401 ведёт на /login без сообщения в окне', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(401, { statusCode: 401, message: 'Unauthorized' }))
+      const { user, dialog } = await openDialog()
+
+      await submitTitle(user, 'Планёрка')
+
+      await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/login'))
+      expect(router.push).not.toHaveBeenCalled()
+      expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument()
+    })
+
+    it('во время запроса «Создать» заблокирована и показывает загрузку, «Отмена» тоже заблокирована', async () => {
+      fetchMock.mockReturnValue(new Promise(() => {}))
+      const { user, dialog } = await openDialog()
+
+      await submitTitle(user, 'Планёрка')
+
+      const submit = within(dialog).getByRole('button', { name: /Создать/ })
+      // HeroUI блокирует кнопку в isPending через aria-disabled: фокус остаётся на ней
+      await waitFor(() => expect(submit).toHaveAttribute('aria-disabled', 'true'))
+      expect(submit).toHaveAttribute('data-pending', 'true')
+      expect(within(dialog).getByLabelText('Загрузка')).toBeInTheDocument()
+      expect(within(dialog).getByRole('button', { name: 'Отмена' })).toBeDisabled()
+    })
+
+    it('повторные нажатия «Создать» дают один запрос', async () => {
+      let resolve: (value: Response) => void = () => {}
+      fetchMock.mockReturnValue(new Promise<Response>((r) => (resolve = r)))
+      const { user, dialog } = await openDialog()
+      await user.click(titleInput())
+      await user.paste('Планёрка')
+
+      const submit = within(dialog).getByRole('button', { name: 'Создать' })
+      await user.tripleClick(submit)
+      await user.click(submit)
+      await user.keyboard('{Enter}')
+
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      resolve(jsonResponse(201, created))
+      await waitFor(() => expect(router.push).toHaveBeenCalledTimes(1))
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('два submit подряд до перерисовки дают один запрос', async () => {
+      fetchMock.mockReturnValue(new Promise(() => {}))
+      const { user, dialog } = await openDialog()
+      await user.click(titleInput())
+      await user.paste('Планёрка')
+
+      const form = dialog.querySelector('form')
+      if (!form) throw new Error('Нет формы в окне')
+      fireEvent.submit(form)
+      fireEvent.submit(form)
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    })
+
+    it('во время запроса Esc окно не закрывает', async () => {
+      fetchMock.mockReturnValue(new Promise(() => {}))
+      const { user, dialog } = await openDialog()
+      await submitTitle(user, 'Планёрка')
+      await waitFor(() =>
+        expect(within(dialog).getByRole('button', { name: /Создать/ })).toHaveAttribute(
+          'aria-disabled',
+          'true',
+        ),
+      )
+
+      await user.keyboard('{Escape}')
+
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+
+    const closeWays = [
+      [
+        '«Отмена»',
+        async (user: ReturnType<typeof userEvent.setup>) =>
+          user.click(screen.getByRole('button', { name: 'Отмена' })),
+      ],
+      ['Esc', async (user: ReturnType<typeof userEvent.setup>) => user.keyboard('{Escape}')],
+      [
+        'клик вне окна',
+        async (user: ReturnType<typeof userEvent.setup>) => user.click(document.body),
+      ],
+    ] as const
+
+    it.each(closeWays)(
+      '%s закрывает окно без запроса; при следующем открытии форма пустая',
+      async (_, close) => {
+        setNow(new Date(2030, 0, 15, 9, 10))
+        const { user } = await openDialog()
+        await user.click(titleInput())
+        await user.paste('Черновик')
+        await user.click(segment('Дата', 'day'))
+        await user.keyboard('20')
+        await user.click(segment('Время', 'hour'))
+        await user.keyboard('18')
+        await user.type(participantInput(), 'Анна{Enter}Бо')
+
+        await close(user)
+
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+        expect(fetchMock).not.toHaveBeenCalled()
+
+        await user.click(screen.getByRole('button', { name: 'Создать встречу' }))
+        await screen.findByRole('dialog')
+
+        expect(titleInput()).toHaveValue('')
+        expect(titleInput()).not.toHaveAttribute('aria-invalid', 'true')
+        expect(segment('Дата', 'day')).toHaveAttribute('aria-valuenow', '15')
+        expect(segment('Время', 'hour')).toHaveAttribute('aria-valuenow', '10')
+        expect(segment('Время', 'minute')).toHaveAttribute('aria-valuenow', '0')
+        expect(tags()).toEqual([])
+        expect(participantInput()).toHaveValue('')
+      },
+    )
+
+    it('после закрытия сообщение об ошибке и ошибки полей не остаются', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(500, null))
+      const { user, dialog } = await openDialog()
+      await submitTitle(user, 'Планёрка')
+      await within(dialog).findByRole('alert')
+      await within(dialog).findByRole('button', { name: 'Создать' })
+      await submitTitle(user, '')
+      await within(dialog).findByText('Введите название')
+
+      await user.keyboard('{Escape}')
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+      await user.click(screen.getByRole('button', { name: 'Создать встречу' }))
+      const reopened = await screen.findByRole('dialog')
+
+      expect(within(reopened).queryByRole('alert')).not.toBeInTheDocument()
+      expect(within(reopened).queryByText('Введите название')).not.toBeInTheDocument()
+    })
+
+    it('при открытии фокус внутри окна — на поле «Название»', async () => {
+      const { dialog } = await openDialog()
+
+      await waitFor(() => expect(titleInput()).toHaveFocus())
+      expect(dialog).toContainElement(document.activeElement as HTMLElement)
+    })
+
+    it.each(closeWays)(
+      'после закрытия (%s) фокус возвращается на «Создать встречу»',
+      async (_, close) => {
+        const { user } = await openDialog()
+        await waitFor(() => expect(titleInput()).toHaveFocus())
+
+        await close(user)
+
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+        await waitFor(() =>
+          expect(screen.getByRole('button', { name: 'Создать встречу' })).toHaveFocus(),
+        )
+      },
+    )
+
+    it('Tab не выводит фокус за пределы окна', async () => {
+      const { user, dialog } = await openDialog()
+      await waitFor(() => expect(titleInput()).toHaveFocus())
+
+      for (let i = 0; i < 15; i++) {
+        await user.tab()
+        expect(dialog).toContainElement(document.activeElement as HTMLElement)
+      }
+      for (let i = 0; i < 15; i++) {
+        await user.tab({ shift: true })
+        expect(dialog).toContainElement(document.activeElement as HTMLElement)
+      }
+    })
+
+    it('форма отправляется с клавиатуры: Enter в поле «Название»', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(201, created))
+      const { user } = await openDialog()
+      await waitFor(() => expect(titleInput()).toHaveFocus())
+
+      await user.keyboard('Планёрка{Enter}')
+
+      await waitFor(() => expect(router.push).toHaveBeenCalledWith('/meetings/m1'))
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('«Отмена» нажимается с клавиатуры', async () => {
+      const { user } = await openDialog()
+      screen.getByRole('button', { name: 'Отмена' }).focus()
+
+      await user.keyboard('{Enter}')
+
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['Дата', 'day', 'Укажите дату'],
+      ['Время', 'minute', 'Укажите время'],
+    ] as const)(
+      'частично стёртое поле «%s» не отправляется, у поля ошибка',
+      async (field, part, message) => {
+        const { user, dialog } = await openDialog()
+
+        // стёрт один сегмент: React Aria оставляет прежнее значение, но отправлять его нельзя
+        await user.click(segment(field, part))
+        await user.keyboard('{Backspace}{Backspace}')
+        expect(segment(field, part)).not.toHaveAttribute('aria-valuenow')
+        await submitTitle(user, 'Планёрка')
+
+        expect(await within(dialog).findByText(message)).toBeInTheDocument()
+        expect(fetchMock).not.toHaveBeenCalled()
+        expect(screen.getByRole('dialog')).toBeInTheDocument()
+      },
+    )
+
+    it('после дозаполнения стёртого сегмента форма отправляется', async () => {
+      setNow(new Date(2030, 0, 15, 9, 10))
+      fetchMock.mockResolvedValue(jsonResponse(201, created))
+      const { user, dialog } = await openDialog()
+      await user.click(segment('Время', 'minute'))
+      await user.keyboard('{Backspace}{Backspace}')
+      await submitTitle(user, 'Планёрка')
+      await within(dialog).findByText('Укажите время')
+
+      await user.click(segment('Время', 'minute'))
+      await user.keyboard('30')
+      await user.click(screen.getByRole('button', { name: 'Создать' }))
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(JSON.parse(String(init.body))).toMatchObject({ date: '2030-01-15T05:30:00.000Z' })
+    })
+
+    it('стёртый сегмент, дозаполненный прежним значением, снимает ошибку и отправляется', async () => {
+      setNow(new Date(2030, 0, 15, 9, 10))
+      fetchMock.mockResolvedValue(jsonResponse(201, created))
+      const { user, dialog } = await openDialog()
+      await user.click(segment('Время', 'minute'))
+      await user.keyboard('{Backspace}{Backspace}')
+      await submitTitle(user, 'Планёрка')
+      await within(dialog).findByText('Укажите время')
+
+      // значение то же (10:00): onChange не вызывается, ошибку снимает перепроверка сегментов
+      await user.click(segment('Время', 'minute'))
+      await user.keyboard('00')
+      await waitFor(() =>
+        expect(within(dialog).queryByText('Укажите время')).not.toBeInTheDocument(),
+      )
+      await user.click(screen.getByRole('button', { name: 'Создать' }))
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(JSON.parse(String(init.body))).toMatchObject({ date: '2030-01-15T05:00:00.000Z' })
+    })
+
+    it('после 401 окно закрывается вместе с уходом на вход и повторно не отправляется', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(401, { statusCode: 401, message: 'Unauthorized' }))
+      const { user } = await openDialog()
+      await submitTitle(user, 'Планёрка')
+
+      await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/login'))
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('во время запроса заблокированы все поля', async () => {
+      fetchMock.mockReturnValue(new Promise(() => {}))
+      const { user } = await openDialog()
+      await submitTitle(user, 'Планёрка')
+
+      await waitFor(() => expect(titleInput()).toBeDisabled())
+      expect(segment('Дата', 'day')).toHaveAttribute('aria-disabled', 'true')
+      expect(segment('Время', 'hour')).toHaveAttribute('aria-disabled', 'true')
+      expect(participantInput()).toBeDisabled()
+    })
+
+    it('ответ, пришедший на скрытую страницу, не переводит на встречу; окно при возврате закрыто', async () => {
+      let resolve: (response: Response) => void = () => {}
+      fetchMock.mockReturnValue(new Promise<Response>((r) => (resolve = r)))
+      const user = userEvent.setup()
+      const view = (mode: 'visible' | 'hidden') => (
+        <Activity mode={mode}>
+          <CreateMeetingDialog />
+        </Activity>
+      )
+      const { rerender } = render(view('visible'))
+      await user.click(screen.getByRole('button', { name: 'Создать встречу' }))
+      await screen.findByRole('dialog')
+      await submitTitle(user, 'Планёрка')
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+
+      // так Next 16 прячет главную при уходе «Назад» во время запроса
+      rerender(view('hidden'))
+      resolve(jsonResponse(201, created))
+      await new Promise((r) => setTimeout(r, 0))
+      rerender(view('visible'))
+
+      expect(router.push).not.toHaveBeenCalled()
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'Создать встречу' }))
+      expect(
+        within(await screen.findByRole('dialog')).getByRole('button', { name: 'Создать' }),
+      ).not.toHaveAttribute('aria-disabled', 'true')
     })
   })
 })

@@ -89,6 +89,10 @@ export function ParticipantsField({
     ) {
       onParticipantsChange(participants.slice(0, -1))
       onErrorChange(null)
+    } else {
+      // React Aria с заданным onKeyDown сам останавливает всплытие: без этого Esc в поле не дошёл
+      // бы до окна и не закрыл его
+      event.continuePropagation()
     }
   }
 
