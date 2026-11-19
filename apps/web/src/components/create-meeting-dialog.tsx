@@ -65,6 +65,10 @@ export function CreateMeetingDialog() {
           participants: [],
         })
         router.push(`/meetings/${encodeURIComponent(meeting.id)}`)
+        // Next 16 скрывает главную, а не размонтирует, и при возврате показал бы её прежние данные.
+        // refresh сразу после push берёт этот переход на себя и сбрасывает кэш скрытых страниц:
+        // главная перезапросит счётчик и «Последние встречи»
+        router.refresh()
         submitting.current = false
         setIsOpen(false)
       } catch (e) {

@@ -133,6 +133,19 @@ describe('CreateMeetingDialog', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
+  it('после создания обновляет данные страниц: главная покажет новый счётчик и встречу', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(201, created))
+    const { user } = await openDialog()
+
+    await submitTitle(user, 'Планёрка')
+
+    await waitFor(() => expect(router.refresh).toHaveBeenCalledTimes(1))
+    // refresh сразу после push: Next обновляет уже новую страницу и сбрасывает данные скрытой главной
+    expect(router.push.mock.invocationCallOrder[0]).toBeLessThan(
+      router.refresh.mock.invocationCallOrder[0],
+    )
+  })
+
   it('выбранная дата тоже переводится: 16.01 02:00 (UTC+5) — 15.01 21:00 UTC', async () => {
     setNow(new Date(2030, 0, 15, 9, 10))
     fetchMock.mockResolvedValue(jsonResponse(201, created))
