@@ -124,6 +124,17 @@ export const deleteAvatar = () => request<void>('/profile/avatar', { method: 'DE
 
 export const logout = () => request<void>('/auth/logout', { method: 'POST' })
 
+export interface CreateMeetingInput {
+  title: string
+  // момент начала в ISO 8601 с часовым поясом (форма отправляет UTC)
+  date: string
+  participants: string[]
+}
+
+// `POST /api/meetings`; некорректные данные — ApiError 400 с причиной из API
+export const createMeeting = (input: CreateMeetingInput) =>
+  request<Meeting>('/meetings', { method: 'POST', body: JSON.stringify(input) })
+
 // Путь файловых эндпоинтов встречи (без префикса `/api`)
 export const meetingFilesPath = (meetingId: string) =>
   `/meetings/${encodeURIComponent(meetingId)}/files`
