@@ -13,12 +13,18 @@ export const NAME_MAX_LENGTH = 100
 // Тот же набор — у названия встречи и имён участников (`apps/api/src/meetings/dto.ts`).
 export const NAME_ALLOWED_PATTERN = '^[^\\p{Cc}\\p{Bidi_Control}]*$'
 
+// Тот же набор для `pattern` в Swagger: в OpenAPI у регулярки нет флага `u`, и клиенты
+// (Ajv по умолчанию, генераторы) прочли бы `\p{Cc}` как буквы `p`, `{`, `C`… Поэтому диапазоны
+// перечислены явно; совпадение с NAME_ALLOWED_PATTERN проверяет `user-name.spec.ts`
+export const NAME_ALLOWED_SCHEMA_PATTERN =
+  '^[^\\u0000-\\u001F\\u007F-\\u009F\\u061C\\u200E\\u200F\\u202A-\\u202E\\u2066-\\u2069]*$'
+
 // Общие правила имени для регистрации и смены имени: trim, не пустое, ≤ 100 символов,
 // без управляющих и bidi-символов и с хотя бы одной буквой или цифрой
 export const IsUserName = () =>
   applyDecorators(
     // Swagger-плагин не заглядывает внутрь applyDecorators, поэтому ограничения для схемы заданы здесь
-    ApiProperty({ minLength: 1, maxLength: NAME_MAX_LENGTH, pattern: NAME_ALLOWED_PATTERN }),
+    ApiProperty({ minLength: 1, maxLength: NAME_MAX_LENGTH, pattern: NAME_ALLOWED_SCHEMA_PATTERN }),
     Transform(({ value }: { value: unknown }) =>
       typeof value === 'string' ? value.trim() : value,
     ),

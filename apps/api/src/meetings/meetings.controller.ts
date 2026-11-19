@@ -10,11 +10,18 @@ import {
   UseGuards,
 } from '@nestjs/common'
 import { CommandBus, QueryBus } from '@nestjs/cqrs'
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
+import {
+  ApiBadRequestResponse,
+  ApiBearerAuth,
+  ApiCreatedResponse,
+  ApiOperation,
+  ApiTags,
+  ApiUnauthorizedResponse,
+} from '@nestjs/swagger'
 import { type AuthenticatedRequest, JwtAuthGuard } from '../auth/jwt-auth.guard.js'
 import { DeleteMeetingCommand } from './commands/delete-meeting.command.js'
 import { CreateMeetingCommand } from './commands/create-meeting.command.js'
-import { CreateMeetingDto } from './dto.js'
+import { CREATE_MEETING_BAD_REQUEST, CreateMeetingDto } from './dto.js'
 import { GetMeetingQuery } from './queries/get-meeting.query.js'
 import { ListMeetingsQuery } from './queries/list-meetings.query.js'
 
@@ -29,6 +36,14 @@ export class MeetingsController {
   ) {}
 
   @Post()
+  @ApiOperation({
+    summary: 'Создать встречу',
+    description:
+      'Название и имена участников обрезаются по краям пробелов; повторы участников без учёта регистра убираются, остаётся первое написание. Правила проверяются только при создании: встречи, созданные раньше, читаются без проверки.',
+  })
+  @ApiCreatedResponse({ description: 'Созданная встреча' })
+  @ApiBadRequestResponse({ description: CREATE_MEETING_BAD_REQUEST })
+  @ApiUnauthorizedResponse({ description: 'Нет токена или токен недействителен' })
   create(
     @Req() req: AuthenticatedRequest,
     @Body() { title, date, participants }: CreateMeetingDto,
