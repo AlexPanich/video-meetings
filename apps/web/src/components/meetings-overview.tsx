@@ -1,6 +1,7 @@
-import { Calendar, Plus } from '@gravity-ui/icons'
-import { Button, Card } from '@heroui/react'
+import { Calendar } from '@gravity-ui/icons'
+import { Card } from '@heroui/react'
 import Link from 'next/link'
+import { CreateMeetingDialog } from '@/components/create-meeting-dialog'
 import { LocalDateTime } from '@/components/local-date-time'
 import { formatParticipants } from '@/lib/format'
 import { getMeetings } from '@/lib/server/meetings'
@@ -27,11 +28,7 @@ export async function MeetingsOverview() {
             <p className="text-3xl font-semibold">{meetings.length}</p>
             <p className="text-muted">{pluralize(meetings.length)} всего</p>
           </div>
-          {/* TODO: подключить создание встречи, когда появится форма */}
-          <Button>
-            <Plus />
-            Создать встречу
-          </Button>
+          <CreateMeetingDialog />
         </Card.Content>
       </Card>
 
