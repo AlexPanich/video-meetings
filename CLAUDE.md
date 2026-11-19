@@ -86,7 +86,7 @@ When a change alters the architecture — new/removed apps or shared packages, m
 
 ## Git hooks (Husky)
 
-`.husky/pre-commit` запускает `pnpm lint` и `pnpm test` (unit, без БД) перед каждым коммитом; при ошибке коммит блокируется. Хуки ставятся автоматически при `pnpm install` (скрипт `prepare`: `husky`, он же выставляет `core.hooksPath`). e2e в хук не входят — они требуют Postgres, запускайте `pnpm test:e2e` вручную. Обход в крайнем случае — `git commit --no-verify`.
+`.husky/pre-commit` запускает `pnpm format:check`, `pnpm lint` и `pnpm test` (unit, без БД) перед каждым коммитом (ESLint форматирование не проверяет: его правила отключает `eslint-config-prettier`; неотформатированный файл — `pnpm format`); при ошибке коммит блокируется. Хуки ставятся автоматически при `pnpm install` (скрипт `prepare`: `husky`, он же выставляет `core.hooksPath`). e2e в хук не входят — они требуют Postgres, запускайте `pnpm test:e2e` вручную. Обход в крайнем случае — `git commit --no-verify`.
 
 ## Правила работы Claude
 
@@ -96,6 +96,6 @@ When a change alters the architecture — new/removed apps or shared packages, m
 
 ## Hooks
 
-`.claude/settings.json` defines a `PostToolUse` hook (`Write|Edit`) that runs `prettier --write` on every file Claude changes; files matched by `.prettierignore` or unsupported by Prettier are skipped. No manual formatting is needed after edits.
+`.claude/settings.json` defines a `PostToolUse` hook (`Write|Edit`) that runs `prettier --write` on every file Claude changes; files matched by `.prettierignore` (including the third-party skills in `.agents`) or unsupported by Prettier are skipped, and a Prettier error (e.g. a syntax error) is reported instead of being swallowed. Edits made through Bash (`sed`, scripts), by hand or by git merges bypass the hook — the pre-commit `format:check` catches them.
 
 The `Stop` hook (`.claude/hooks/stop.js`) is the Ralph loop: it picks up open issues of the milestone from `.claude/ralph.config.json`, runs `claude -p` with the rules from `.claude/ralph.md`, and opens a PR when the milestone is done. It is inert unless `RALPH_ACTIVE=1` is set, so ordinary sessions are not affected. Start the loop with `node .claude/ralph.start.js` (it sets the variable itself); to run only the hook use `RALPH_ACTIVE=1 node .claude/hooks/stop.js`. Claude Code does not show the hook's output in the terminal, so the hook (and the nested `claude -p` sessions, including the final Opus review) logs to `.claude/ralph.log` (git-ignored): follow it with `tail -f .claude/ralph.log`. A nested session that fails (usually by hitting `maxTurns`) does not fire its own `Stop` hook, so the parent hook (or `ralph.start.js` for the first iteration) logs the failure and starts the next iteration itself; the agent then continues the unfinished work in the branch (rule in `ralph.md`), and two failures in a row stop the loop. The hook has `timeout: 3600` in `settings.json`, otherwise a long nested session or the review would be killed. There is no on/off flag in the config on purpose: the file is tracked by git, and a local edit of it conflicts with updates from `main`. Per phase, change `milestone` and `branch` in the config in a separate PR.

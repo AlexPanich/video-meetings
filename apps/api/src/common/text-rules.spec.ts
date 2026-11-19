@@ -28,7 +28,10 @@ describe('text-rules', () => {
     expect(VISIBLE_TEXT.test(text)).toBe(false)
   })
 
-  it.each(['!!!', 'é', 'é', 'Анна', '👍', '한'])('VISIBLE_TEXT находит видимый символ в %j', (text) => {
-    expect(VISIBLE_TEXT.test(text)).toBe(true)
-  })
+  it.each(['!!!', 'é', 'é', 'Анна', '👍', '한'])(
+    'VISIBLE_TEXT находит видимый символ в %j',
+    (text) => {
+      expect(VISIBLE_TEXT.test(text)).toBe(true)
+    },
+  )
 })

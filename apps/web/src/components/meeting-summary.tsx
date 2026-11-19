@@ -34,8 +34,7 @@ const UNKNOWN_STATUS = { label: 'Обрабатывается', color: 'default'
 const statusInfo = (status: string) =>
   (STATUS as Record<string, (typeof STATUS)[SummaryStatus] | undefined>)[status] ?? UNKNOWN_STATUS
 
-const isActive = (summary: Summary | null) =>
-  summary !== null && statusInfo(summary.status).active
+const isActive = (summary: Summary | null) => summary !== null && statusInfo(summary.status).active
 
 type State = { kind: 'loading' } | { kind: 'error' } | { kind: 'ready'; summary: Summary | null }
 
