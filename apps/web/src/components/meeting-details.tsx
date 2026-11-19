@@ -31,6 +31,20 @@ export async function MeetingDetails({ params }: { params: Promise<{ id: string 
               {' · '}
               {formatParticipants(result.data.participants.length)}
             </p>
+            {result.data.participants.length > 0 && (
+              // у старых встреч (созданных до проверок) участников может быть сколько угодно,
+              // а в именах — bidi-символы: высота ограничена, имя изолировано в <bdi>
+              <ul
+                aria-label="Участники"
+                className="mt-3 flex max-h-40 flex-wrap gap-2 overflow-y-auto"
+              >
+                {result.data.participants.map((name, index) => (
+                  <li key={index} className="rounded-full bg-default px-3 py-1 text-sm">
+                    <bdi>{name}</bdi>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
           <MeetingSummary key={`summary-${result.data.id}`} meetingId={result.data.id} />
           <MeetingFiles key={result.data.id} meetingId={result.data.id} />

@@ -57,21 +57,30 @@ export interface AuthResult {
   user: User
 }
 
+// `message` — первая причина; `messages` — все причины из ответа (400 валидации: по одной на поле),
+// без них — `[message]`
 export class ApiError extends Error {
+  readonly messages: string[]
+
   constructor(
     message: string,
     readonly status: number,
+    messages?: string[],
   ) {
     super(message)
+    this.messages = messages?.length ? messages : [message]
   }
 }
 
 // Nest отдаёт `message` строкой или массивом строк (ошибки валидации)
-export const extractErrorMessage = (body: unknown): string | undefined => {
+export const extractErrorMessages = (body: unknown): string[] => {
   const message = (body as { message?: unknown } | null)?.message
-  const first = Array.isArray(message) ? message[0] : message
-  return typeof first === 'string' && first ? first : undefined
+  const all: unknown[] = Array.isArray(message) ? message : [message]
+  return all.filter((item): item is string => typeof item === 'string' && item !== '')
 }
+
+export const extractErrorMessage = (body: unknown): string | undefined =>
+  extractErrorMessages(body)[0]
 
 // Запросы идут через route handlers Next (`/api/*`): JWT живёт в HttpOnly-cookie и добавляется на сервере
 const request = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
@@ -88,7 +97,8 @@ const request = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
 
   if (!response.ok) {
     const body = await response.json().catch(() => null)
-    throw new ApiError(extractErrorMessage(body) ?? 'Что-то пошло не так', response.status)
+    const messages = extractErrorMessages(body)
+    throw new ApiError(messages[0] ?? 'Что-то пошло не так', response.status, messages)
   }
   return response.status === 204 ? (undefined as T) : response.json()
 }
@@ -131,7 +141,7 @@ export interface CreateMeetingInput {
   participants: string[]
 }
 
-// `POST /api/meetings`; некорректные данные — ApiError 400 с причиной из API
+// `POST /api/meetings`; некорректные данные — ApiError 400 с причинами из API (`messages`)
 export const createMeeting = (input: CreateMeetingInput) =>
   request<Meeting>('/meetings', { method: 'POST', body: JSON.stringify(input) })
 

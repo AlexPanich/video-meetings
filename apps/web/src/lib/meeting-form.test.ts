@@ -1,8 +1,13 @@
 import {
+  MEETING_PARTICIPANTS_MAX,
   MEETING_TITLE_MAX_LENGTH,
+  PARTICIPANT_NAME_MAX_LENGTH,
+  addParticipants,
   defaultMeetingStart,
   localDateTimeToIso,
+  participantKey,
   validateMeetingTitle,
+  validateParticipant,
 } from './meeting-form'
 
 // Часовой пояс «браузера» с ненулевым смещением (UTC+5, без перехода на летнее время):
@@ -114,5 +119,108 @@ describe('localDateTimeToIso', () => {
     it('из двух 02:30 при переводе назад берётся первое, летнее (00:30 UTC)', () => {
       expect(localDateTimeToIso('2030-10-27', '02:30')).toBe('2030-10-27T00:30:00.000Z')
     })
+  })
+})
+
+// Ключ повтора — как `participantKey` в `apps/api/src/meetings/participants.ts`
+describe('participantKey', () => {
+  it.each([
+    ['регистр', 'Анна Петрова', 'анна петрова'],
+    ['пробелы по краям', '  Анна  ', 'Анна'],
+    ['несколько пробелов внутри', 'Анна  Петрова', 'Анна Петрова'],
+    ['неразрывный пробел', 'Анна Петрова', 'Анна Петрова'],
+    ['невидимый символ', 'Ан​на', 'Анна'],
+    ['полноширинные буквы (NFKC)', 'ＡＮＮＡ', 'anna'],
+    ['ß и SS', 'Straße', 'STRASSE'],
+  ])('одинаковый ключ: %s', (_, a, b) => {
+    expect(participantKey(a)).toBe(participantKey(b))
+  })
+
+  it('разные имена — разные ключи', () => {
+    expect(participantKey('Анна')).not.toBe(participantKey('Анна П.'))
+  })
+})
+
+describe('validateParticipant', () => {
+  it('новое имя допустимо', () => {
+    expect(validateParticipant('Анна', ['Борис'])).toBeNull()
+  })
+
+  it.each([
+    ['пустое', ''],
+    ['из пробелов', '   '],
+    ['из невидимых символов', '​​'],
+  ])('имя %s — «Введите имя участника»', (_, value) => {
+    expect(validateParticipant(value, [])).toBe('Введите имя участника')
+  })
+
+  it.each([
+    ['управляющим символом', 'Ан\u0007на'],
+    ['переводом строки', 'Ан\nна'],
+    ['bidi-символом', 'Ан‮на'],
+  ])('имя с %s — недопустимые символы', (_, value) => {
+    expect(validateParticipant(value, [])).toBe('Имя участника содержит недопустимые символы')
+  })
+
+  it('длиннее 100 символов после обрезки — ошибка длины', () => {
+    expect(validateParticipant('я'.repeat(PARTICIPANT_NAME_MAX_LENGTH + 1), [])).toBe(
+      'Имя участника не длиннее 100 символов',
+    )
+  })
+
+  it('ровно 100 символов (эмодзи — один символ), пробелы по краям не считаются', () => {
+    expect(validateParticipant(`  ${'😀'.repeat(PARTICIPANT_NAME_MAX_LENGTH)}  `, [])).toBeNull()
+  })
+
+  it('повтор без учёта регистра и пробелов — уже добавлен (с написанием из списка)', () => {
+    expect(validateParticipant('  анна  ПЕТРОВА ', ['Анна Петрова'])).toBe(
+      'Участник «Анна Петрова» уже добавлен',
+    )
+  })
+
+  it('51-й участник — лимит', () => {
+    const fifty = Array.from({ length: MEETING_PARTICIPANTS_MAX }, (_, i) => `Участник ${i + 1}`)
+    expect(validateParticipant('Новый', fifty)).toBe('Участников не больше 50')
+    expect(validateParticipant('Новый', fifty.slice(1))).toBeNull()
+  })
+})
+
+describe('addParticipants', () => {
+  it('добавляет имена по порядку без пробелов по краям, пустые куски пропускает', () => {
+    expect(addParticipants([' Анна ', '', '  ', 'Борис'], [])).toEqual({
+      list: ['Анна', 'Борис'],
+      failedAt: -1,
+      error: null,
+    })
+  })
+
+  it('останавливается на первой ошибке; индекс — по исходному массиву, с пустыми кусками', () => {
+    const result = addParticipants(['Анна', '', 'Ан\u0007на', 'Борис'], [])
+
+    expect(result).toEqual({
+      list: ['Анна'],
+      failedAt: 2,
+      error: 'Имя участника содержит недопустимые символы',
+    })
+  })
+
+  it('без skipDuplicates повтор — ошибка', () => {
+    expect(addParticipants(['анна'], ['Анна']).error).toBe('Участник «Анна» уже добавлен')
+  })
+
+  it('со skipDuplicates пропускает повтор уже добавленного и добавленного в той же пачке', () => {
+    const result = addParticipants(['анна', 'Борис', 'БОРИС'], ['Анна'], { skipDuplicates: true })
+
+    expect(result).toEqual({ list: ['Анна', 'Борис'], failedAt: -1, error: null })
+  })
+
+  it('лимит срабатывает внутри пачки', () => {
+    const existing = Array.from({ length: MEETING_PARTICIPANTS_MAX - 1 }, (_, i) => `У${i}`)
+
+    const result = addParticipants(['Анна', 'Борис'], existing)
+
+    expect(result.list).toHaveLength(MEETING_PARTICIPANTS_MAX)
+    expect(result.failedAt).toBe(1)
+    expect(result.error).toBe(`Участников не больше ${MEETING_PARTICIPANTS_MAX}`)
   })
 })
