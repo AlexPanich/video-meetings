@@ -51,7 +51,8 @@ export function AvatarEditor({
     const input = event.currentTarget
     const file = input.files?.[0]
     input.value = '' // тот же файл можно выбрать повторно
-    if (!file || busyRef.current) return
+    // во время router.refresh() кнопка в pending, но файл в input можно выбрать и так
+    if (!file || busyRef.current || refreshing) return
     // ref поднимается до проверки: она асинхронная (читает сигнатуру файла)
     busyRef.current = true
     const reason = await validateAvatarFile(file)
