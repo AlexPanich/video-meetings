@@ -21,6 +21,66 @@ export const validateMeetingTitle = (value: string): string | null => {
   return null
 }
 
+// Как `PARTICIPANT_NAME_MAX_LENGTH` и `MEETING_PARTICIPANTS_MAX` в API
+export const PARTICIPANT_NAME_MAX_LENGTH = 100
+export const MEETING_PARTICIPANTS_MAX = 50
+
+// Ключ повтора — тот же алгоритм, что `participantKey` в `apps/api/src/meetings/participants.ts`:
+// иначе форма покажет два тега («Анна Петрова» и «Анна  Петрова»), а API молча сохранит один
+export const participantKey = (name: string) =>
+  name
+    .normalize('NFKC')
+    .replace(/\p{Cf}/gu, '')
+    .replace(/[\s\p{Z}]+/gu, ' ')
+    .trim()
+    .toUpperCase()
+    .toLowerCase()
+
+// Добавленный участник с тем же ключом или undefined
+export const findParticipant = (value: string, participants: readonly string[]) => {
+  const key = participantKey(value)
+  return participants.find((name) => participantKey(name) === key)
+}
+
+// Есть ли в имени что-то, кроме пробелов и невидимых символов
+export const hasVisibleText = (value: string) => VISIBLE_TEXT.test(value.trim())
+
+// Причина, по которой имя нельзя добавить к `participants`, или null. Порядок проверок — как в API
+// (пусто, символы, длина), затем повтор и лимит списка
+export const validateParticipant = (value: string, participants: readonly string[]) => {
+  const name = value.trim()
+  if (!hasVisibleText(name)) return 'Введите имя участника'
+  if (FORBIDDEN_TEXT.test(name)) return 'Имя участника содержит недопустимые символы'
+  if ([...name].length > PARTICIPANT_NAME_MAX_LENGTH) {
+    return `Имя участника не длиннее ${PARTICIPANT_NAME_MAX_LENGTH} символов`
+  }
+  const existing = findParticipant(name, participants)
+  if (existing !== undefined) return `Участник «${existing}» уже добавлен`
+  if (participants.length >= MEETING_PARTICIPANTS_MAX) {
+    return `Участников не больше ${MEETING_PARTICIPANTS_MAX}`
+  }
+  return null
+}
+
+// Добавляет имена по порядку; пустые куски пропускаются, а со `skipDuplicates` — и уже добавленные.
+// На первом имени, которое нельзя добавить, останавливается: возвращает его индекс и причину,
+// добавленные до него остаются в `list`
+export const addParticipants = (
+  names: readonly string[],
+  participants: readonly string[],
+  { skipDuplicates = false } = {},
+): { list: string[]; failedAt: number; error: string | null } => {
+  let list = [...participants]
+  for (const [index, name] of names.entries()) {
+    if (!hasVisibleText(name)) continue
+    if (skipDuplicates && findParticipant(name, list) !== undefined) continue
+    const error = validateParticipant(name, list)
+    if (error) return { list, failedAt: index, error }
+    list = [...list, name.trim()]
+  }
+  return { list, failedAt: -1, error: null }
+}
+
 const pad = (n: number) => String(n).padStart(2, '0')
 
 // Начало встречи по умолчанию — ближайший следующий целый час по времени браузера

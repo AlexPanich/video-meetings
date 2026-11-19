@@ -297,7 +297,7 @@ describe('CreateMeetingDialog', () => {
     })
 
     it.each([
-      ['другой регистр', 'АННА'],
+      ['другой регистр', 'АННА ПЕТРОВА'],
       ['пробелы по краям и внутри', '  анна   петрова  '],
     ])('повтор (%s) тег не добавляет, причина показывается', async (_, name) => {
       const { user, dialog } = await openDialog()
@@ -414,6 +414,44 @@ describe('CreateMeetingDialog', () => {
 
       expect(await within(dialog).findByText('Участников не больше 50')).toBeInTheDocument()
       expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('ошибка повтора у поля не мешает отправить форму: повтор не дублируется', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(201, created))
+      const { user, dialog } = await openDialog()
+      await user.type(participantInput(), 'Анна{Enter}анна{Enter}')
+      await within(dialog).findByText('Участник «Анна» уже добавлен')
+
+      await submitTitle(user, 'Планёрка')
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+      expect(sentBody().participants).toEqual(['Анна'])
+    })
+
+    it('остаток вставки с запятыми после ошибки при отправке режется на имена', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(201, created))
+      const { user } = await openDialog()
+      await user.type(participantInput(), 'Анна{Enter}')
+      await pasteParticipant(user, 'Анна, Борис, Вера')
+      expect(participantInput()).toHaveValue('Анна, Борис, Вера')
+
+      await user.click(screen.getByRole('button', { name: 'Удалить Анна' }))
+      await submitTitle(user, 'Планёрка')
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+      expect(sentBody().participants).toEqual(['Анна', 'Борис', 'Вера'])
+    })
+
+    it('удаление тега не снимает ошибку, которую оно не исправляет', async () => {
+      const { user, dialog } = await openDialog()
+      await user.type(participantInput(), 'Анна{Enter}')
+      await pasteParticipant(user, 'я'.repeat(101))
+      await user.keyboard('{Enter}')
+      await within(dialog).findByText('Имя участника не длиннее 100 символов')
+
+      await user.click(screen.getByRole('button', { name: 'Удалить Анна' }))
+
+      expect(within(dialog).getByText('Имя участника не длиннее 100 символов')).toBeInTheDocument()
     })
 
     it('ошибка участников от API показывается в окне, даже если она не первая', async () => {

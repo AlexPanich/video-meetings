@@ -17,8 +17,14 @@ import {
 import { type CalendarDate, type Time, parseDate, parseTime } from '@internationalized/date'
 import { useRouter } from 'next/navigation'
 import { type ComponentProps, type SyntheticEvent, useRef, useState, useTransition } from 'react'
+import { ParticipantsField } from '@/components/participants-field'
 import { ApiError, createMeeting } from '@/lib/api'
-import { defaultMeetingStart, localDateTimeToIso, validateMeetingTitle } from '@/lib/meeting-form'
+import {
+  addParticipants,
+  defaultMeetingStart,
+  localDateTimeToIso,
+  validateMeetingTitle,
+} from '@/lib/meeting-form'
 
 // Текст ошибки поля даты или времени: вместо сообщения браузера о пустом обязательном поле — своё
 // (React Aria не вызывает `validate` для null, поэтому пустое поле ловит только `isRequired`)
@@ -31,14 +37,19 @@ const requiredMessage =
   ({ validationDetails, validationErrors }) =>
     validationDetails.valueMissing ? message : validationErrors.join(' ')
 
-// Окно создания встречи с кнопкой «Создать встречу»: название, дата и время по времени браузера;
-// в API уходит момент в UTC и пустой список участников, после успеха — переход на страницу встречи
+// Окно создания встречи с кнопкой «Создать встречу»: название, дата и время по времени браузера,
+// участники тегами; в API уходит момент в UTC и участники (вместе с невписанным в тег именем),
+// после успеха — переход на страницу встречи
 export function CreateMeetingDialog() {
   const router = useRouter()
   const [isOpen, setIsOpen] = useState(false)
   const [date, setDate] = useState<CalendarDate | null>(null)
   const [time, setTime] = useState<Time | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [participants, setParticipants] = useState<string[]>([])
+  const [participantInput, setParticipantInput] = useState('')
+  const [participantError, setParticipantError] = useState<string | null>(null)
+  // причины ошибки API: у 400 валидации их несколько, по одной на поле
+  const [error, setError] = useState<string[] | null>(null)
   // pending держится до конца перехода на страницу встречи; ref отсекает повторную отправку сразу
   const [pending, startTransition] = useTransition()
   const submitting = useRef(false)
@@ -48,6 +59,9 @@ export function CreateMeetingDialog() {
     const start = defaultMeetingStart()
     setDate(parseDate(start.date))
     setTime(parseTime(start.time))
+    setParticipants([])
+    setParticipantInput('')
+    setParticipantError(null)
     setError(null)
     setIsOpen(true)
   }
@@ -64,6 +78,22 @@ export function CreateMeetingDialog() {
     const title = String(new FormData(event.currentTarget).get('title'))
     // поле уже не пускает отправку с ошибкой; проверка здесь — страховка, чтобы запрос не ушёл
     if (validateMeetingTitle(title)) return
+    // Невписанный в тег ввод тоже уходит в участники и становится тегами: так при ошибке API видно,
+    // что отправлено. В нём могут остаться запятые (после ошибки при вставке списка) — режем так же,
+    // как поле; повтор уже добавленного просто не дублируется, некорректное имя блокирует отправку
+    const pending = addParticipants(participantInput.split(','), participants, {
+      skipDuplicates: true,
+    })
+    if (pending.error) {
+      setParticipants(pending.list)
+      setParticipantInput(participantInput.split(',').slice(pending.failedAt).join(','))
+      setParticipantError(pending.error)
+      return
+    }
+    const sentParticipants = pending.list
+    setParticipants(sentParticipants)
+    setParticipantInput('')
+    setParticipantError(null)
     // `CalendarDate` — `YYYY-MM-DD`, `Time` — `HH:MM:SS`
     const startsAt = localDateTimeToIso(date.toString(), time.toString())
     submitting.current = true
@@ -73,7 +103,7 @@ export function CreateMeetingDialog() {
         const meeting = await createMeeting({
           title: title.trim(),
           date: startsAt,
-          participants: [],
+          participants: sentParticipants,
         })
         // 2xx без id (неожиданный ответ BFF) не должен вести на `/meetings/undefined`
         if (typeof meeting?.id !== 'string' || !meeting.id) {
@@ -97,7 +127,11 @@ export function CreateMeetingDialog() {
           router.replace('/login')
           return
         }
-        setError(e instanceof Error ? e.message : 'Что-то пошло не так')
+        setError(
+          e instanceof ApiError
+            ? e.messages
+            : [e instanceof Error ? e.message : 'Что-то пошло не так'],
+        )
       }
     })
   }
@@ -121,7 +155,13 @@ export function CreateMeetingDialog() {
                   <Alert status="danger" role="alert">
                     <Alert.Indicator />
                     <Alert.Content>
-                      <Alert.Description>{error}</Alert.Description>
+                      <Alert.Description>
+                        {error.map((message, index) => (
+                          <span key={index} className="block">
+                            {message}
+                          </span>
+                        ))}
+                      </Alert.Description>
                     </Alert.Content>
                   </Alert>
                 )}
@@ -181,6 +221,15 @@ export function CreateMeetingDialog() {
                     </div>
                   </TimeField>
                 </div>
+
+                <ParticipantsField
+                  participants={participants}
+                  onParticipantsChange={setParticipants}
+                  value={participantInput}
+                  onValueChange={setParticipantInput}
+                  error={participantError}
+                  onErrorChange={setParticipantError}
+                />
               </Modal.Body>
 
               <Modal.Footer>

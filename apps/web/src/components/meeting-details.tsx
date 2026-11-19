@@ -31,6 +31,15 @@ export async function MeetingDetails({ params }: { params: Promise<{ id: string 
               {' · '}
               {formatParticipants(result.data.participants.length)}
             </p>
+            {result.data.participants.length > 0 && (
+              <ul aria-label="Участники" className="mt-3 flex flex-wrap gap-2">
+                {result.data.participants.map((name, index) => (
+                  <li key={index} className="rounded-full bg-default px-3 py-1 text-sm">
+                    {name}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
           <MeetingSummary key={`summary-${result.data.id}`} meetingId={result.data.id} />
           <MeetingFiles key={result.data.id} meetingId={result.data.id} />
