@@ -6,3 +6,6 @@ build
 coverage
 pnpm-lock.yaml
 next-env.d.ts
+
+# сторонние скиллы, ставятся по skills-lock.json
+.agents
