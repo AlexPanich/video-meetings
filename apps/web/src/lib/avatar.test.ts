@@ -1,6 +1,7 @@
 import { MAX_AVATAR_BYTES, hasAvatarSignature, validateAvatarFile } from './avatar'
 
-const bytes = (...values: number[]) => new Uint8Array(new ArrayBuffer(values.length)).map((_, i) => values[i])
+const bytes = (...values: number[]) =>
+  new Uint8Array(new ArrayBuffer(values.length)).map((_, i) => values[i])
 const ascii = (text: string) => [...text].map((char) => char.charCodeAt(0))
 
 const JPEG = bytes(0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 0, 1)
