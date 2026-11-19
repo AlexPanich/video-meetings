@@ -34,7 +34,9 @@ export const defaultMeetingStart = (now: Date = new Date()): { date: string; tim
 }
 
 // Дата `YYYY-MM-DD` и время `HH:MM` (секунды, если есть, отбрасываются) в часовом поясе браузера →
-// момент в ISO 8601 UTC
+// момент в ISO 8601 UTC. При переводе часов вперёд несуществующее время (02:30) `Date` сдвигает на
+// час вперёд (03:30), при переводе назад из двух 01:30 берёт первое (летнее). Выбора пояса в форме
+// нет, поэтому так и оставлено; поведение зафиксировано тестом
 export const localDateTimeToIso = (date: string, time: string): string => {
   const [year, month, day] = date.split('-').map(Number)
   const [hours, minutes] = time.split(':').map(Number)

@@ -98,4 +98,21 @@ describe('localDateTimeToIso', () => {
   it('раннее утро по местному времени — предыдущий день в UTC', () => {
     expect(localDateTimeToIso('2030-01-15', '02:30')).toBe('2030-01-14T21:30:00.000Z')
   })
+
+  describe('переход на летнее время (Europe/Berlin)', () => {
+    beforeEach(() => {
+      process.env.TZ = 'Europe/Berlin'
+    })
+    afterEach(() => {
+      process.env.TZ = 'Asia/Yekaterinburg'
+    })
+
+    it('несуществующее 02:30 при переводе вперёд сдвигается на 03:30 (01:30 UTC)', () => {
+      expect(localDateTimeToIso('2030-03-31', '02:30')).toBe('2030-03-31T01:30:00.000Z')
+    })
+
+    it('из двух 02:30 при переводе назад берётся первое, летнее (00:30 UTC)', () => {
+      expect(localDateTimeToIso('2030-10-27', '02:30')).toBe('2030-10-27T00:30:00.000Z')
+    })
+  })
 })

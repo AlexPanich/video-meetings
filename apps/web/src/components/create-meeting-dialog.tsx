@@ -16,9 +16,20 @@ import {
 } from '@heroui/react'
 import { type CalendarDate, type Time, parseDate, parseTime } from '@internationalized/date'
 import { useRouter } from 'next/navigation'
-import { type SyntheticEvent, useRef, useState, useTransition } from 'react'
+import { type ComponentProps, type SyntheticEvent, useRef, useState, useTransition } from 'react'
 import { ApiError, createMeeting } from '@/lib/api'
 import { defaultMeetingStart, localDateTimeToIso, validateMeetingTitle } from '@/lib/meeting-form'
+
+// Текст ошибки поля даты или времени: вместо сообщения браузера о пустом обязательном поле — своё
+// (React Aria не вызывает `validate` для null, поэтому пустое поле ловит только `isRequired`)
+type FieldErrorRender = Extract<
+  ComponentProps<typeof FieldError>['children'],
+  (v: never) => unknown
+>
+const requiredMessage =
+  (message: string): FieldErrorRender =>
+  ({ validationDetails, validationErrors }) =>
+    validationDetails.valueMissing ? message : validationErrors.join(' ')
 
 // Окно создания встречи с кнопкой «Создать встречу»: название, дата и время по времени браузера;
 // в API уходит момент в UTC и пустой список участников, после успеха — переход на страницу встречи
@@ -64,13 +75,22 @@ export function CreateMeetingDialog() {
           date: startsAt,
           participants: [],
         })
-        router.push(`/meetings/${encodeURIComponent(meeting.id)}`)
-        // Next 16 скрывает главную, а не размонтирует, и при возврате показал бы её прежние данные.
-        // refresh сразу после push берёт этот переход на себя и сбрасывает кэш скрытых страниц:
-        // главная перезапросит счётчик и «Последние встречи»
-        router.refresh()
+        // 2xx без id (неожиданный ответ BFF) не должен вести на `/meetings/undefined`
+        if (typeof meeting?.id !== 'string' || !meeting.id) {
+          throw new ApiError('Что-то пошло не так', 0)
+        }
+        // Обновления после await в React 19 не входят в переход сами: без вложенного
+        // startTransition окно закрылось бы раньше, чем откроется страница встречи
+        startTransition(() => {
+          router.push(`/meetings/${encodeURIComponent(meeting.id)}`)
+          // Next 16 скрывает главную, а не размонтирует, и при возврате показал бы её прежние
+          // данные. refresh сразу после push берёт этот переход на себя и сбрасывает кэш скрытых
+          // страниц целиком (`invalidateBfCache()` в `refresh-reducer` Next 16.4), а не только
+          // текущей: главная перезапросит счётчик и «Последние встречи»
+          router.refresh()
+          setIsOpen(false)
+        })
         submitting.current = false
-        setIsOpen(false)
       } catch (e) {
         submitting.current = false
         if (e instanceof ApiError && e.status === 401) {
@@ -121,14 +141,14 @@ export function CreateMeetingDialog() {
                   </div>
                 </TextField>
 
-                <div className="flex gap-3">
+                <div className="flex items-start gap-3">
                   <DateField
                     fullWidth
-                    isRequired
                     name="date"
                     value={date}
                     onChange={setDate}
                     granularity="day"
+                    isRequired
                   >
                     <Label>Дата</Label>
                     <DateField.Group variant="secondary">
@@ -136,16 +156,19 @@ export function CreateMeetingDialog() {
                         {(segment) => <DateField.Segment segment={segment} />}
                       </DateField.Input>
                     </DateField.Group>
+                    <div className="min-h-5">
+                      <FieldError>{requiredMessage('Укажите дату')}</FieldError>
+                    </div>
                   </DateField>
 
                   <TimeField
                     fullWidth
-                    isRequired
                     name="time"
                     value={time}
                     onChange={setTime}
                     hourCycle={24}
                     granularity="minute"
+                    isRequired
                   >
                     <Label>Время</Label>
                     <TimeField.Group variant="secondary">
@@ -153,6 +176,9 @@ export function CreateMeetingDialog() {
                         {(segment) => <TimeField.Segment segment={segment} />}
                       </TimeField.Input>
                     </TimeField.Group>
+                    <div className="min-h-5">
+                      <FieldError>{requiredMessage('Укажите время')}</FieldError>
+                    </div>
                   </TimeField>
                 </div>
               </Modal.Body>

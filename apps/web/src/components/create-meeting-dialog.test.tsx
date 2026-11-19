@@ -184,4 +184,32 @@ describe('CreateMeetingDialog', () => {
     expect(router.push).not.toHaveBeenCalled()
     expect(screen.getByRole('dialog')).toBeInTheDocument()
   })
+
+  it('ответ без id не ведёт на /meetings/undefined: окно остаётся с ошибкой', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(201, {}))
+    const { user, dialog } = await openDialog()
+
+    await submitTitle(user, 'Планёрка')
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Что-то пошло не так')
+    expect(router.push).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+
+  it.each([
+    ['Дата', 'year', 'Укажите дату'],
+    ['Время', 'minute', 'Укажите время'],
+  ] as const)('стёртое поле «%s» не отправляется, у поля ошибка', async (field, last, message) => {
+    const { user, dialog } = await openDialog()
+
+    // React Aria отдаёт null, только когда стёрты все сегменты; Backspace на пустом сегменте
+    // переводит фокус на предыдущий, поэтому стираем с последнего
+    await user.click(segment(field, last))
+    await user.keyboard('{Backspace}'.repeat(12))
+    await submitTitle(user, 'Планёрка')
+
+    expect(await within(dialog).findByText(message)).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
 })
