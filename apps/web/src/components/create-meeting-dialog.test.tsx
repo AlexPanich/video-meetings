@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { CreateMeetingDialog } from './create-meeting-dialog'
 
@@ -74,9 +74,9 @@ const submitTitle = async (user: ReturnType<typeof userEvent.setup>, title: stri
 
 const participantInput = () => screen.getByRole('textbox', { name: 'Участники' })
 
-// Теги участников — строки сетки TagGroup (React Aria) с подписью «Участники»
+// Теги участников — строки сетки TagGroup (React Aria) с подписью «Добавленные участники»
 const tags = () => {
-  const grid = screen.queryByRole('grid', { name: 'Участники' })
+  const grid = screen.queryByRole('grid', { name: 'Добавленные участники' })
   if (!grid) return []
   return within(grid)
     .queryAllByRole('row')
@@ -431,15 +431,68 @@ describe('CreateMeetingDialog', () => {
     it('остаток вставки с запятыми после ошибки при отправке режется на имена', async () => {
       fetchMock.mockResolvedValue(jsonResponse(201, created))
       const { user } = await openDialog()
-      await user.type(participantInput(), 'Анна{Enter}')
+      const many = Array.from({ length: 49 }, (_, i) => `Участник ${i + 1}`)
+      await pasteParticipant(user, `${many.join(',')},`)
+      // «Анна» — 50-я, на «Борисе» лимит: он и всё после него остаются в поле
       await pasteParticipant(user, 'Анна, Борис, Вера')
-      expect(participantInput()).toHaveValue('Анна, Борис, Вера')
+      expect(participantInput()).toHaveValue(' Борис, Вера')
 
-      await user.click(screen.getByRole('button', { name: 'Удалить Анна' }))
+      await user.click(screen.getByRole('button', { name: 'Удалить Участник 1' }))
+      await user.click(screen.getByRole('button', { name: 'Удалить Участник 2' }))
       await submitTitle(user, 'Планёрка')
 
       await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
-      expect(sentBody().participants).toEqual(['Анна', 'Борис', 'Вера'])
+      expect(sentBody().participants).toEqual([...many.slice(2), 'Анна', 'Борис', 'Вера'])
+    })
+
+    it('повтор во вставленном списке пропускается, остальные имена становятся тегами', async () => {
+      const { user, dialog } = await openDialog()
+      await user.type(participantInput(), 'Анна{Enter}')
+
+      await pasteParticipant(user, 'анна, Борис, Вера')
+
+      expect(tags()).toEqual(['Анна', 'Борис'])
+      expect(participantInput()).toHaveValue(' Вера')
+      expect(within(dialog).queryByText(/уже добавлен/)).not.toBeInTheDocument()
+    })
+
+    it('правка остатка с запятыми не сохраняет имя посреди правки', async () => {
+      const { user, dialog } = await openDialog()
+      const long = 'я'.repeat(101)
+      await pasteParticipant(user, `${long}, Вера`)
+      await within(dialog).findByText('Имя участника не длиннее 100 символов')
+
+      // курсор после длинного имени: укорачиваем его до 100 символов
+      await user.keyboard('{ArrowLeft>6/}{Backspace}')
+
+      expect(tags()).toEqual([])
+      expect(participantInput()).toHaveValue(`${'я'.repeat(100)}, Вера`)
+
+      await user.keyboard('{Enter}')
+
+      expect(tags()).toEqual(['я'.repeat(100), 'Вера'])
+      expect(participantInput()).toHaveValue('')
+    })
+
+    it('Enter, подтверждающий вариант IME в Safari (keyCode 229), тег не добавляет', async () => {
+      const { user } = await openDialog()
+      await user.type(participantInput(), 'Анна')
+
+      fireEvent.keyDown(participantInput(), { key: 'Enter', keyCode: 229 })
+
+      expect(tags()).toEqual([])
+      expect(participantInput()).toHaveValue('Анна')
+    })
+
+    it('во время запроса участников не изменить', async () => {
+      fetchMock.mockReturnValue(new Promise(() => {}))
+      const { user } = await openDialog()
+      await user.type(participantInput(), 'Анна{Enter}')
+
+      await submitTitle(user, 'Планёрка')
+
+      await waitFor(() => expect(participantInput()).toBeDisabled())
+      expect(screen.getByRole('button', { name: 'Удалить Анна' })).toBeDisabled()
     })
 
     it('удаление тега не снимает ошибку, которую оно не исправляет', async () => {

@@ -2,6 +2,7 @@ import {
   MEETING_PARTICIPANTS_MAX,
   MEETING_TITLE_MAX_LENGTH,
   PARTICIPANT_NAME_MAX_LENGTH,
+  addParticipants,
   defaultMeetingStart,
   localDateTimeToIso,
   participantKey,
@@ -181,5 +182,45 @@ describe('validateParticipant', () => {
     const fifty = Array.from({ length: MEETING_PARTICIPANTS_MAX }, (_, i) => `Участник ${i + 1}`)
     expect(validateParticipant('Новый', fifty)).toBe('Участников не больше 50')
     expect(validateParticipant('Новый', fifty.slice(1))).toBeNull()
+  })
+})
+
+describe('addParticipants', () => {
+  it('добавляет имена по порядку без пробелов по краям, пустые куски пропускает', () => {
+    expect(addParticipants([' Анна ', '', '  ', 'Борис'], [])).toEqual({
+      list: ['Анна', 'Борис'],
+      failedAt: -1,
+      error: null,
+    })
+  })
+
+  it('останавливается на первой ошибке; индекс — по исходному массиву, с пустыми кусками', () => {
+    const result = addParticipants(['Анна', '', 'Ан\u0007на', 'Борис'], [])
+
+    expect(result).toEqual({
+      list: ['Анна'],
+      failedAt: 2,
+      error: 'Имя участника содержит недопустимые символы',
+    })
+  })
+
+  it('без skipDuplicates повтор — ошибка', () => {
+    expect(addParticipants(['анна'], ['Анна']).error).toBe('Участник «Анна» уже добавлен')
+  })
+
+  it('со skipDuplicates пропускает повтор уже добавленного и добавленного в той же пачке', () => {
+    const result = addParticipants(['анна', 'Борис', 'БОРИС'], ['Анна'], { skipDuplicates: true })
+
+    expect(result).toEqual({ list: ['Анна', 'Борис'], failedAt: -1, error: null })
+  })
+
+  it('лимит срабатывает внутри пачки', () => {
+    const existing = Array.from({ length: MEETING_PARTICIPANTS_MAX - 1 }, (_, i) => `У${i}`)
+
+    const result = addParticipants(['Анна', 'Борис'], existing)
+
+    expect(result.list).toHaveLength(MEETING_PARTICIPANTS_MAX)
+    expect(result.failedAt).toBe(1)
+    expect(result.error).toBe(`Участников не больше ${MEETING_PARTICIPANTS_MAX}`)
   })
 })

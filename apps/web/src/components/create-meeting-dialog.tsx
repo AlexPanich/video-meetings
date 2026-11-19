@@ -81,16 +81,16 @@ export function CreateMeetingDialog() {
     // Невписанный в тег ввод тоже уходит в участники и становится тегами: так при ошибке API видно,
     // что отправлено. В нём могут остаться запятые (после ошибки при вставке списка) — режем так же,
     // как поле; повтор уже добавленного просто не дублируется, некорректное имя блокирует отправку
-    const pending = addParticipants(participantInput.split(','), participants, {
+    const parsed = addParticipants(participantInput.split(','), participants, {
       skipDuplicates: true,
     })
-    if (pending.error) {
-      setParticipants(pending.list)
-      setParticipantInput(participantInput.split(',').slice(pending.failedAt).join(','))
-      setParticipantError(pending.error)
+    if (parsed.error) {
+      setParticipants(parsed.list)
+      setParticipantInput(participantInput.split(',').slice(parsed.failedAt).join(','))
+      setParticipantError(parsed.error)
       return
     }
-    const sentParticipants = pending.list
+    const sentParticipants = parsed.list
     setParticipants(sentParticipants)
     setParticipantInput('')
     setParticipantError(null)
@@ -229,6 +229,7 @@ export function CreateMeetingDialog() {
                   onValueChange={setParticipantInput}
                   error={participantError}
                   onErrorChange={setParticipantError}
+                  isDisabled={pending}
                 />
               </Modal.Body>
 
