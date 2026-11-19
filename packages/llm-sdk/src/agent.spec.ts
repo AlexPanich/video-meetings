@@ -3,7 +3,7 @@
 import { z } from 'zod'
 import { createSdkMcpServer, query, tool } from './index.js'
 import type { MockInstance } from 'vitest'
-import type { Options, SDKMessage, SDKUserMessage } from './index.js'
+import type { HookInput, Options, SDKMessage, SDKUserMessage } from './index.js'
 
 const OLLAMA_URL = 'http://ollama.test:11434'
 
@@ -1431,5 +1431,207 @@ describe('ревью фазы 2: сбои хуков, зависшие обра�
     expect(last.at(-1)).toEqual(
       expect.objectContaining({ role: 'tool', content: `часть 119: ` + 'д'.repeat(200) }),
     )
+  })
+})
+
+describe('параллельный запуск read-only инструментов', () => {
+  const DELAY_MS = 100
+  const READ = 'mcp__files__read'
+  const WRITE = 'mcp__files__write'
+  const bypass: Options = {
+    permissionMode: 'bypassPermissions',
+    allowDangerouslySkipPermissions: true,
+  }
+
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  /**
+   * Сервер `files`: `read` (readOnlyHint) и `write` (без подсказки). Обработчики ждут `ms` и пишут
+   * в `log` начало и конец; `active`/`maxActive` — сколько обработчиков работает одновременно.
+   */
+  function filesServer() {
+    const log: string[] = []
+    const stats = { active: 0, maxActive: 0 }
+    const handler =
+      (kind: string) =>
+      async ({ id, ms }: { id: string; ms: number }) => {
+        log.push(`start ${kind} ${id}`)
+        stats.active += 1
+        stats.maxActive = Math.max(stats.maxActive, stats.active)
+        await sleep(ms)
+        stats.active -= 1
+        log.push(`end ${kind} ${id}`)
+        return { content: [{ type: 'text' as const, text: `${kind} ${id}` }] }
+      }
+    const shape = { id: z.string(), ms: z.number() }
+    const read = tool('read', 'Читает файл', shape, handler('read'), {
+      annotations: { readOnlyHint: true },
+    })
+    const write = tool('write', 'Пишет файл', shape, handler('write'))
+    const server = createSdkMcpServer({ name: 'files', version: '1.0.0', tools: [read, write] })
+    return { server, log, stats }
+  }
+
+  const call = (name: string, id: string, ms = DELAY_MS) => ({ name, arguments: { id, ms } })
+
+  it('два read-only обработчика по 100 мс выполняются одновременно (~100 мс, а не ~200)', async () => {
+    scriptedOllama(toolCallReply(call(READ, 'a'), call(READ, 'b')), ollamaReply('Готово'))
+    const { server, stats } = filesServer()
+
+    const started = performance.now()
+    const messages = await collect(
+      query({ prompt: 'go', options: { ...bypass, mcpServers: { files: server } } }),
+    )
+    const elapsed = performance.now() - started
+
+    expect(stats.maxActive).toBe(2)
+    expect(elapsed).toBeLessThan(DELAY_MS * 1.8)
+    expect(lastResult(messages).subtype).toBe('success')
+  })
+
+  it('не-read-only вызовы идут по очереди', async () => {
+    scriptedOllama(toolCallReply(call(WRITE, 'a'), call(WRITE, 'b')), ollamaReply('Готово'))
+    const { server, log, stats } = filesServer()
+
+    const started = performance.now()
+    await collect(query({ prompt: 'go', options: { ...bypass, mcpServers: { files: server } } }))
+    const elapsed = performance.now() - started
+
+    expect(stats.maxActive).toBe(1)
+    expect(log).toEqual(['start write a', 'end write a', 'start write b', 'end write b'])
+    expect(elapsed).toBeGreaterThanOrEqual(DELAY_MS * 2 - 5)
+  })
+
+  it('запись разделяет группы: read-only до неё завершаются раньше, после — стартуют позже', async () => {
+    scriptedOllama(
+      toolCallReply(call(READ, 'a'), call(READ, 'b'), call(WRITE, 'c', 10), call(READ, 'd', 10)),
+      ollamaReply('Готово'),
+    )
+    const { server, log } = filesServer()
+
+    await collect(query({ prompt: 'go', options: { ...bypass, mcpServers: { files: server } } }))
+
+    expect(log.slice(0, 2)).toEqual(['start read a', 'start read b'])
+    expect(log.slice(4)).toEqual(['start write c', 'end write c', 'start read d', 'end read d'])
+  })
+
+  it('порядок tool_result и истории — как у вызовов, даже если первый завершился последним', async () => {
+    const fetchMock = scriptedOllama(
+      toolCallReply(call(READ, 'slow', 80), call(READ, 'fast', 5)),
+      ollamaReply('Готово'),
+    )
+    const { server, log } = filesServer()
+
+    const messages = await collect(
+      query({ prompt: 'go', options: { ...bypass, mcpServers: { files: server } } }),
+    )
+
+    expect(log.indexOf('end read fast')).toBeLessThan(log.indexOf('end read slow'))
+    const uses = toolUses(messages)
+    const results = toolResults(messages)
+    expect(results.map((r) => r.toolUseId)).toEqual(uses.map((u) => u.id))
+    expect(results.map((r) => r.text)).toEqual(['read slow', 'read fast'])
+    const user = messages.find((m) => m.type === 'user')
+    expect(user?.tool_use_result).toEqual([
+      { content: [{ type: 'text', text: 'read slow' }] },
+      { content: [{ type: 'text', text: 'read fast' }] },
+    ])
+    const history = requests(fetchMock)[1].messages.filter((m) => m.role === 'tool')
+    expect(history.map((m) => m.content)).toEqual(['read slow', 'read fast'])
+  })
+
+  it('PreToolUse и canUseTool — по очереди до обработчиков, PostToolUse — после всех, в порядке вызовов', async () => {
+    scriptedOllama(toolCallReply(call(READ, 'a', 30), call(READ, 'b', 5)), ollamaReply('Готово'))
+    const { server, log } = filesServer()
+    const record = (event: string) => async (input: HookInput) => {
+      const toolInput = 'tool_input' in input ? (input.tool_input as { id: string }) : undefined
+      log.push(`${event} ${toolInput?.id}`)
+      // Медленный хук: следующий вызов не начинается, пока не решён текущий.
+      await sleep(5)
+      return {}
+    }
+    const canUseTool = vi.fn(async (_name: string, input: Record<string, unknown>) => {
+      log.push(`canUseTool ${String(input.id)}`)
+      await sleep(5)
+      return { behavior: 'allow' as const }
+    })
+
+    await collect(
+      query({
+        prompt: 'go',
+        options: {
+          mcpServers: { files: server },
+          canUseTool,
+          hooks: {
+            PreToolUse: [{ hooks: [record('PreToolUse')] }],
+            PostToolUse: [{ hooks: [record('PostToolUse')] }],
+          },
+        },
+      }),
+    )
+
+    expect(log).toEqual([
+      'PreToolUse a',
+      'canUseTool a',
+      'PreToolUse b',
+      'canUseTool b',
+      'start read a',
+      'start read b',
+      'end read b',
+      'end read a',
+      'PostToolUse a',
+      'PostToolUse b',
+    ])
+  })
+
+  it('отказ одному из параллельных вызовов не мешает остальным', async () => {
+    scriptedOllama(toolCallReply(call(READ, 'a'), call(READ, 'b')), ollamaReply('Готово'))
+    const { server, log } = filesServer()
+    const canUseTool = vi.fn(async (_name: string, input: Record<string, unknown>) =>
+      input.id === 'a'
+        ? { behavior: 'deny' as const, message: 'нельзя' }
+        : { behavior: 'allow' as const },
+    )
+
+    const messages = await collect(
+      query({ prompt: 'go', options: { mcpServers: { files: server }, canUseTool } }),
+    )
+
+    expect(log).toEqual(['start read b', 'end read b'])
+    expect(toolResults(messages).map((r) => [r.isError, r.text])).toEqual([
+      [true, 'нельзя'],
+      [false, 'read b'],
+    ])
+    expect(lastResult(messages).permission_denials).toEqual([
+      expect.objectContaining({ tool_name: READ, tool_input: { id: 'a', ms: DELAY_MS } }),
+    ])
+  })
+
+  it('interrupt() прерывает все параллельные обработчики', async () => {
+    scriptedOllama(toolCallReply(call(READ, 'a'), call(READ, 'b')), ollamaReply('?'))
+    const signals: AbortSignal[] = []
+    const hang = tool(
+      'read',
+      'Никогда не завершается',
+      { id: z.string(), ms: z.number() },
+      (_args, extra) => {
+        signals.push((extra as { signal: AbortSignal }).signal)
+        return new Promise<never>(() => {})
+      },
+      { annotations: { readOnlyHint: true } },
+    )
+    const server = createSdkMcpServer({ name: 'files', version: '1.0.0', tools: [hang] })
+    const q = query({ prompt: 'go', options: { ...bypass, mcpServers: { files: server } } })
+
+    const types: string[] = []
+    const done = (async () => {
+      for await (const message of q) types.push(message.type)
+    })()
+    await vi.waitFor(() => expect(signals).toHaveLength(2))
+    await q.interrupt()
+    await done
+
+    expect(types).toEqual(['system', 'assistant'])
+    expect(signals.every((signal) => signal.aborted)).toBe(true)
   })
 })

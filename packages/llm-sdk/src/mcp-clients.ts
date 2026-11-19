@@ -130,6 +130,7 @@ interface ListedTool {
   name: string
   description?: string
   inputSchema: Record<string, unknown>
+  annotations?: { readOnlyHint?: boolean }
 }
 
 function externalTool(
@@ -147,6 +148,7 @@ function externalTool(
     parameters,
     // Аргументы проверяет сам сервер: ошибка вернётся как результат с isError.
     validate: (input) => ({ success: true, data: input }),
+    readOnly: listed.annotations?.readOnlyHint === true,
     handler: async (args, extra) => {
       const signal = signalOf(extra)
       const result = await client.callTool({ name: listed.name, arguments: args }, undefined, {

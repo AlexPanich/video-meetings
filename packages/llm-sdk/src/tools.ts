@@ -31,6 +31,11 @@ interface CompiledTool {
   parameters: Record<string, unknown>
   /** Проверка аргументов перед вызовом; ошибка уходит модели. */
   validate: (input: Record<string, unknown>) => ToolInputCheck
+  /**
+   * `annotations.readOnlyHint: true`: обработчик можно запускать параллельно с соседними
+   * read-only вызовами того же ответа модели.
+   */
+  readOnly: boolean
   handler: (args: Record<string, unknown>, extra: unknown) => Promise<CallToolResult>
 }
 
@@ -81,6 +86,7 @@ export function createSdkMcpServer(
           ? { success: true, data: parsed.data }
           : { success: false, message: parsed.error.message }
       },
+      readOnly: definition.annotations?.readOnlyHint === true,
       handler: definition.handler,
     })
   }

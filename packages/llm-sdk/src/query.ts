@@ -22,8 +22,7 @@ import {
   structuredOutput,
 } from './structured.js'
 import type { StructuredOutput } from './structured.js'
-import { executeTool } from './tool-runner.js'
-import type { ToolOutcome } from './tool-runner.js'
+import { executeTools } from './tool-runner.js'
 import { registerTools } from './tools.js'
 import type { RegisteredTool } from './tools.js'
 import type {
@@ -419,13 +418,13 @@ async function* agentLoop(session: Session, prompt: string): AsyncGenerator<SDKM
       return true
     }
 
-    const results: ToolOutcome[] = []
-    for (const call of calls) {
-      // Отмена между вызовами: инструменты (и их побочные эффекты) уже не выполняются.
-      if (stopped(state)) return false
-      results.push(await executeTool(session, call.block, denials))
-    }
-    if (stopped(state)) return false
+    const results = await executeTools(
+      session,
+      calls.map((call) => call.block),
+      denials,
+      () => stopped(state),
+    )
+    if (!results || stopped(state)) return false
     for (const [index, outcome] of results.entries()) {
       session.history.push({
         role: 'tool',
